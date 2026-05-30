@@ -4,11 +4,25 @@
  */
 module;
 
+#include <algorithm>
 #include <cmath>
 #include <cstddef>
 #include <cstdint>
 #include <limits>
 #include <span>
+#include <version>
+
+/* Conditional constexpr for the helpers that call into <cmath>.
+ *
+ * std::abs / std::copysign (and the rest of <cmath>) only become usable in
+ * constant expressions once the standard library implements P0533, which it
+ * advertises via __cpp_lib_constexpr_cmath (C++23; not yet defined by current
+ * libstdc++/libc++/MSVC STL even in C++23 mode). */
+#if defined(__cpp_lib_constexpr_cmath)
+#define SGL_CMATH_CONSTEXPR constexpr
+#else
+#define SGL_CMATH_CONSTEXPR
+#endif
 
 export module sgl:scalar;
 
@@ -33,7 +47,8 @@ constexpr float fp32_rel_tol{128.0f * std::numeric_limits<float>::epsilon()};
  * Returns true when lhs and rhs agree within an absolute or relative tolerance.
  * Bitwise equality is checked first to handle ±inf and ±0 correctly.
  */
-inline constexpr bool nearly_equal(const float lhs, const float rhs, const float abs_tol = fp32_abs_tol, const float rel_tol = fp32_rel_tol) noexcept {
+inline SGL_CMATH_CONSTEXPR bool nearly_equal(
+    const float lhs, const float rhs, const float abs_tol = fp32_abs_tol, const float rel_tol = fp32_rel_tol) noexcept {
     if (lhs == rhs) {
         return true;
     }
@@ -50,7 +65,7 @@ inline constexpr bool nearly_equal(const float lhs, const float rhs, const float
     return diff <= largest * rel_tol;
 }
 
-inline constexpr bool nearly_zero(const float val, const float tolerance = fp32_abs_tol) noexcept {
+inline SGL_CMATH_CONSTEXPR bool nearly_zero(const float val, const float tolerance = fp32_abs_tol) noexcept {
     return std::abs(val) < tolerance;
 }
 
@@ -58,28 +73,28 @@ inline constexpr bool nearly_zero(const float val, const float tolerance = fp32_
  * Vector comparisons
  * ============================================================ */
 
-inline constexpr bool nearly_equal(const vec2 lhs, const vec2 rhs, const float abs_tol = fp32_abs_tol, const float rel_tol = fp32_rel_tol) noexcept {
+inline SGL_CMATH_CONSTEXPR bool nearly_equal(const vec2 lhs, const vec2 rhs, const float abs_tol = fp32_abs_tol, const float rel_tol = fp32_rel_tol) noexcept {
     return nearly_equal(lhs.x, rhs.x, abs_tol, rel_tol) && nearly_equal(lhs.y, rhs.y, abs_tol, rel_tol);
 }
 
-inline constexpr bool nearly_equal(const vec3 lhs, const vec3 rhs, const float abs_tol = fp32_abs_tol, const float rel_tol = fp32_rel_tol) noexcept {
+inline SGL_CMATH_CONSTEXPR bool nearly_equal(const vec3 lhs, const vec3 rhs, const float abs_tol = fp32_abs_tol, const float rel_tol = fp32_rel_tol) noexcept {
     return nearly_equal(lhs.x, rhs.x, abs_tol, rel_tol) && nearly_equal(lhs.y, rhs.y, abs_tol, rel_tol) && nearly_equal(lhs.z, rhs.z, abs_tol, rel_tol);
 }
 
-inline constexpr bool nearly_equal(const vec4 lhs, const vec4 rhs, const float abs_tol = fp32_abs_tol, const float rel_tol = fp32_rel_tol) noexcept {
+inline SGL_CMATH_CONSTEXPR bool nearly_equal(const vec4 lhs, const vec4 rhs, const float abs_tol = fp32_abs_tol, const float rel_tol = fp32_rel_tol) noexcept {
     return nearly_equal(lhs.x, rhs.x, abs_tol, rel_tol) && nearly_equal(lhs.y, rhs.y, abs_tol, rel_tol) && nearly_equal(lhs.z, rhs.z, abs_tol, rel_tol) &&
            nearly_equal(lhs.w, rhs.w, abs_tol, rel_tol);
 }
 
-inline constexpr bool nearly_zero(const vec2 val, const float tolerance = fp32_abs_tol) noexcept {
+inline SGL_CMATH_CONSTEXPR bool nearly_zero(const vec2 val, const float tolerance = fp32_abs_tol) noexcept {
     return nearly_zero(val.x, tolerance) && nearly_zero(val.y, tolerance);
 }
 
-inline constexpr bool nearly_zero(const vec3 val, const float tolerance = fp32_abs_tol) noexcept {
+inline SGL_CMATH_CONSTEXPR bool nearly_zero(const vec3 val, const float tolerance = fp32_abs_tol) noexcept {
     return nearly_zero(val.x, tolerance) && nearly_zero(val.y, tolerance) && nearly_zero(val.z, tolerance);
 }
 
-inline constexpr bool nearly_zero(const vec4 val, const float tolerance = fp32_abs_tol) noexcept {
+inline SGL_CMATH_CONSTEXPR bool nearly_zero(const vec4 val, const float tolerance = fp32_abs_tol) noexcept {
     return nearly_zero(val.x, tolerance) && nearly_zero(val.y, tolerance) && nearly_zero(val.z, tolerance) && nearly_zero(val.w, tolerance);
 }
 
@@ -88,7 +103,7 @@ inline constexpr bool nearly_zero(const vec4 val, const float tolerance = fp32_a
  * ============================================================ */
 
 /* Returns the unit cardinal axis (+x, +y, or +z) closest to `direction`, sign-preserved. */
-inline constexpr vec3 snap_to_axis(const vec3& direction) noexcept {
+inline SGL_CMATH_CONSTEXPR vec3 snap_to_axis(const vec3& direction) noexcept {
     const auto ax{std::abs(direction.x)};
     const auto ay{std::abs(direction.y)};
     const auto az{std::abs(direction.z)};
@@ -109,7 +124,7 @@ inline constexpr vec3 snap_to_axis(const vec3& direction) noexcept {
  * singularity at n = (0, 0, -1), then constructs {u, v} analytically without
  * a branch or a cross product.
  */
-inline constexpr plane_basis build_plane_basis(const vec3 plane_origin, const vec3 plane_normal) noexcept {
+inline SGL_CMATH_CONSTEXPR plane_basis build_plane_basis(const vec3 plane_origin, const vec3 plane_normal) noexcept {
     const auto nx{plane_normal.x};
     const auto ny{plane_normal.y};
     const auto nz{plane_normal.z};
@@ -191,3 +206,5 @@ inline float polygon_perimeter(std::span<const vec2> pts) noexcept {
 }
 
 } // namespace sgl
+
+#undef SGL_CMATH_CONSTEXPR
