@@ -6,9 +6,12 @@ module;
 
 #include <immintrin.h>
 
+#include <algorithm>
 #include <cassert>
 #include <cmath>
 #include <cstdint>
+#include <limits>
+#include <type_traits>
 
 export module sgl:simd;
 
