@@ -29,20 +29,34 @@ set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 
 # ---------------------------------------------------------------------------------------
 # Compiler support check
+#
+# Two floors are folded into each minimum below:
+#   * C++20 named modules.
+#   * CWG 2518 — permits `static_assert(false)` in an uninstantiated template
+#     branch (used in the consteval lane-mask helpers). It is a defect report,
+#     so it applies retroactively, but only on compilers that implemented it:
+#     GCC 13, Clang 17, MSVC 19.40 (VS 2022 17.10). MSVC was the laggard here.
+# The binding constraint per toolchain: GCC modules need 14 (> CWG's 13), Clang
+# needs 17 for CWG 2518 (> its module floor of 16), MSVC needs 19.40.
 # ---------------------------------------------------------------------------------------
 if(CMAKE_CXX_COMPILER_ID MATCHES "Clang")
-    if(CMAKE_CXX_COMPILER_VERSION VERSION_LESS "16")
-        message(FATAL_ERROR "sgl: Clang >= 16 required for C++20 modules "
+    if(CMAKE_CXX_COMPILER_VERSION VERSION_LESS "17")
+        message(FATAL_ERROR "sgl: Clang >= 17 required (C++20 modules + CWG 2518) "
             "(found ${CMAKE_CXX_COMPILER_VERSION}).")
     endif()
 elseif(CMAKE_CXX_COMPILER_ID STREQUAL "GNU")
     if(CMAKE_CXX_COMPILER_VERSION VERSION_LESS "14")
-        message(FATAL_ERROR "sgl: GCC >= 14 required for C++20 modules "
+        message(FATAL_ERROR "sgl: GCC >= 14 required (C++20 modules; CWG 2518 since 13) "
+            "(found ${CMAKE_CXX_COMPILER_VERSION}).")
+    endif()
+elseif(CMAKE_CXX_COMPILER_ID STREQUAL "MSVC")
+    if(CMAKE_CXX_COMPILER_VERSION VERSION_LESS "19.40")
+        message(FATAL_ERROR "sgl: MSVC >= 19.40 (VS 2022 17.10) required for CWG 2518 "
             "(found ${CMAKE_CXX_COMPILER_VERSION}).")
     endif()
 else()
     message(WARNING "sgl: untested compiler '${CMAKE_CXX_COMPILER_ID}'. "
-        "Clang >= 16 or GCC >= 14 are the supported toolchains.")
+        "Supported toolchains: GCC >= 14, Clang >= 17, MSVC >= 19.40.")
 endif()
 
 # ---------------------------------------------------------------------------------------
@@ -84,7 +98,12 @@ target_compile_features(${PROJECT_NAME} PUBLIC cxx_std_20)
 
 # AVX2 + FMA on x86-64. PUBLIC so the installed export carries it to consumers,
 # whose recompilation of the (inline) module interface needs the same ISA.
-target_compile_options(${PROJECT_NAME} PUBLIC "$<$<BOOL:${IS_X86_64}>:-mavx2;-mfma>")
+# Keyed on the frontend variant (not the compiler id) so clang-cl gets /arch:AVX2.
+# MSVC folds FMA3 into /arch:AVX2; there is no separate /arch:FMA.
+target_compile_options(${PROJECT_NAME} PUBLIC
+    "$<$<AND:$<BOOL:${IS_X86_64}>,$<CXX_COMPILER_FRONTEND_VARIANT:GNU>>:-mavx2;-mfma>"
+    "$<$<AND:$<BOOL:${IS_X86_64}>,$<CXX_COMPILER_FRONTEND_VARIANT:MSVC>>:/arch:AVX2>"
+)
 
 if(SGL_PIC)
     set_target_properties(${PROJECT_NAME} PROPERTIES POSITION_INDEPENDENT_CODE ON)
@@ -95,32 +114,50 @@ endif()
 # ---------------------------------------------------------------------------------------
 add_library(project_flags INTERFACE)
 
-target_compile_options(project_flags INTERFACE
-    -Wall
-    -Wpedantic
-    -Wextra
-    -Wshadow
-    -Wconversion
-    -Wnarrowing
-    -Wfloat-conversion
-    -Wsign-conversion
-    -Wold-style-cast
-    -Wundef
-    -Wuninitialized
-    -Werror
-)
+# MSVC is true for cl.exe and for clang-cl; both take the /-style warning flags.
+if(MSVC)
+    target_compile_options(project_flags INTERFACE
+        /W4
+        /permissive- # conformance mode (also wanted by the modules front-end)
+        /WX
+    )
+else()
+    target_compile_options(project_flags INTERFACE
+        -Wall
+        -Wpedantic
+        -Wextra
+        -Wshadow
+        -Wconversion
+        -Wnarrowing
+        -Wfloat-conversion
+        -Wsign-conversion
+        -Wold-style-cast
+        -Wundef
+        -Wuninitialized
+        -Werror
+    )
 
-# Compiler-specific warnings
-if(CMAKE_CXX_COMPILER_ID MATCHES "Clang")
-    target_compile_options(project_flags INTERFACE
-        -Wmove
-        -Wno-reference-tu-local-entity-in-other-tu
-    )
-elseif(CMAKE_CXX_COMPILER_ID STREQUAL "GNU")
-    target_compile_options(project_flags INTERFACE
-        -Wpessimizing-move
-        -Wredundant-move
-    )
+    if(CMAKE_CXX_COMPILER_ID MATCHES "Clang")
+        target_compile_options(project_flags INTERFACE
+            -Wmove
+            # Tolerate the version-specific -Wno-* below: the exposure warning
+            # group was renamed/added across the supported Clang range (>= 17),
+            # so a name absent on a given version must not become a -Werror.
+            -Wno-unknown-warning-option
+            # SIMD intrinsics in <immintrin.h> are static inline (TU-local). Using
+            # them in module-interface inline functions/templates "exposes" them,
+            # which Clang flags. They are always_inline builtins, so nothing
+            # actually crosses the link boundary, unavoidable and benign for a
+            # SIMD module. The group is spelled differently across versions:
+            -Wno-reference-tu-local-entity-in-other-tu  # Clang <= 21
+            -Wno-TU-local-entity-exposure               # Clang 22+
+        )
+    elseif(CMAKE_CXX_COMPILER_ID STREQUAL "GNU")
+        target_compile_options(project_flags INTERFACE
+            -Wpessimizing-move
+            -Wredundant-move
+        )
+    endif()
 endif()
 
 # BUILD_INTERFACE: project flags/warnings are a build-only concern and must
