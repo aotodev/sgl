@@ -1585,6 +1585,85 @@ template <spatial_vector Vec> float distance_point_to_segment(const Vec& point, 
     return distance(point, closest);
 }
 
+/**
+ * Closest points between two 3D segments [a0, a1] and [b0, b1].
+ *
+ * Follows Ericson, "Real-Time Collision Detection": solve for the closest
+ * points on the two infinite lines, then clamp the parameters into [0, 1] and
+ * re-solve as endpoints fall outside, so segment ends are handled exactly.
+ * Degenerate (zero-length) segments collapse to the point-segment / point-point
+ * cases. The result carries the squared distance, so capsule/clearance tests can
+ * compare against a squared radius without a square root.
+ */
+inline segment_closest_result closest_points_between_segments(const vec3& a0, const vec3& a1, const vec3& b0, const vec3& b1) noexcept {
+    const __m128 p1 = _mm_load_ps(&a0.x);
+    const __m128 p2 = _mm_load_ps(&b0.x);
+    const __m128 d1 = _mm_sub_ps(_mm_load_ps(&a1.x), p1); /* direction of segment A */
+    const __m128 d2 = _mm_sub_ps(_mm_load_ps(&b1.x), p2); /* direction of segment B */
+    const __m128 r = _mm_sub_ps(p1, p2);
+
+    constexpr std::int32_t dp = 0x71;                   /* 3-lane dot, result in lane 0 */
+    const auto a{_mm_cvtss_f32(_mm_dp_ps(d1, d1, dp))}; /* squared length of A */
+    const auto e{_mm_cvtss_f32(_mm_dp_ps(d2, d2, dp))}; /* squared length of B */
+    const auto f{_mm_cvtss_f32(_mm_dp_ps(d2, r, dp))};
+
+    /* squared, since a and e are squared lengths */
+    constexpr auto eps{fp32_abs_tol * fp32_abs_tol};
+
+    float s{};
+    float t{};
+    if (a <= eps && e <= eps) {
+        /* both segments degenerate to points */
+    } else if (a <= eps) {
+        /* segment A is a point */
+        t = std::clamp(f / e, 0.0f, 1.0f);
+    } else {
+        const float c = _mm_cvtss_f32(_mm_dp_ps(d1, r, dp));
+        if (e <= eps) {
+            /* segment B is a point */
+            s = std::clamp(-c / a, 0.0f, 1.0f);
+        } else {
+            const auto b{_mm_cvtss_f32(_mm_dp_ps(d1, d2, dp))};
+            const auto denom{a * e - b * b}; /* >= 0; zero when segments are parallel */
+
+            /* closest point on line A to line B, clamped; parallel -> pick s = 0 */
+            s = denom > 0.0f ? std::clamp((b * f - c * e) / denom, 0.0f, 1.0f) : 0.0f;
+
+            /* closest point on line B to S1(s); re-clamp s if t leaves [0, 1] */
+            t = (b * s + f) / e;
+            if (t < 0.0f) {
+                t = 0.0f;
+                s = std::clamp(-c / a, 0.0f, 1.0f);
+            } else if (t > 1.0f) {
+                t = 1.0f;
+                s = std::clamp((b - c) / a, 0.0f, 1.0f);
+            }
+        }
+    }
+
+    const __m128 c1 = _mm_fmadd_ps(_mm_set1_ps(s), d1, p1); /* a0 + s * d1 */
+    const __m128 c2 = _mm_fmadd_ps(_mm_set1_ps(t), d2, p2); /* b0 + t * d2 */
+    const __m128 diff = _mm_sub_ps(c2, c1);
+
+    segment_closest_result out{};
+    _mm_store_ps(&out.point_a.x, c1);
+    _mm_store_ps(&out.point_b.x, c2);
+    out.s = s;
+    out.t = t;
+    out.distance_squared = _mm_cvtss_f32(_mm_dp_ps(diff, diff, dp));
+    return out;
+}
+
+/* Squared distance between two 3D segments (closest approach). */
+inline float distance_between_segments_sq(const vec3& a0, const vec3& a1, const vec3& b0, const vec3& b1) noexcept {
+    return closest_points_between_segments(a0, a1, b0, b1).distance_squared;
+}
+
+/* Distance between two 3D segments (closest approach). */
+inline float distance_between_segments(const vec3& a0, const vec3& a1, const vec3& b0, const vec3& b1) noexcept {
+    return std::sqrt(distance_between_segments_sq(a0, a1, b0, b1));
+}
+
 /* ============================================================
  * Plane operations
  * ============================================================ */
