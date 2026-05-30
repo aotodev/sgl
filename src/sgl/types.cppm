@@ -237,6 +237,22 @@ export struct segment_polygon_hit {
     bool hit{};                  /**< @brief True when an intersection was found. */
 };
 
+/**
+ * @brief Closest approach between two 3D line segments.
+ *
+ * @c point_a lies on the first segment, @c point_b on the second; @c s and @c t
+ * are their respective parametric positions in [0, 1]. @c distance_squared is the
+ * squared gap (zero when the segments touch or cross) — compare it against a
+ * squared radius for capsule/clearance tests without taking a square root.
+ */
+export struct segment_closest_result {
+    vec3 point_a{};           /**< @brief Closest point on the first segment. */
+    vec3 point_b{};           /**< @brief Closest point on the second segment. */
+    float s{};                /**< @brief Parametric position along the first segment [0, 1]. */
+    float t{};                /**< @brief Parametric position along the second segment [0, 1]. */
+    float distance_squared{}; /**< @brief Squared distance between @c point_a and @c point_b. */
+};
+
 /* ============================================================
  * Grid types
  * ============================================================ */
