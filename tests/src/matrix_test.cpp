@@ -8,8 +8,6 @@
 
 import sgl;
 
-// NOLINTBEGIN(cppcoreguidelines-avoid-magic-numbers)
-
 /* ============================================================
  * mat2
  * ============================================================ */
@@ -239,5 +237,3 @@ TEST(Mat4, ScaleMatrix) {
     auto s = sgl::scale(sgl::mat4_identity, 2.0f);
     EXPECT_FLOAT_EQ(s.cols[0].x, 2);
 }
-
-// NOLINTEND(cppcoreguidelines-avoid-magic-numbers)

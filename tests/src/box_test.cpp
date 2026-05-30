@@ -6,8 +6,6 @@
 
 import sgl;
 
-// NOLINTBEGIN(cppcoreguidelines-avoid-magic-numbers)
-
 /* ============================================================
  * box2d
  * ============================================================ */
@@ -163,5 +161,3 @@ TEST(Box3d, FromPoint) {
     EXPECT_FLOAT_EQ(b.min.y, 2.0f);
     EXPECT_FLOAT_EQ(b.max.y, 2.0f);
 }
-
-// NOLINTEND(cppcoreguidelines-avoid-magic-numbers)

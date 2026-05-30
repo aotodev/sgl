@@ -7,8 +7,6 @@
 
 import sgl;
 
-// NOLINTBEGIN(cppcoreguidelines-avoid-magic-numbers)
-
 /* --- nearly_equal / nearly_zero --- */
 
 TEST(Vec2, NearlyEqual) {
@@ -354,5 +352,3 @@ TEST(Vec2, AngleBetween) {
     auto a = sgl::angle_between(sgl::vec2{1, 0}, sgl::vec2{-1, 0});
     EXPECT_NEAR(a, std::acos(-1.0f), 1e-5f); /* π */
 }
-
-// NOLINTEND(cppcoreguidelines-avoid-magic-numbers)
