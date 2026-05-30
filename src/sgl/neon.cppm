@@ -11,9 +11,12 @@ module;
 
 #include <arm_neon.h>
 
+#include <algorithm>
 #include <cassert>
 #include <cmath>
 #include <cstdint>
+#include <limits>
+#include <type_traits>
 
 export module sgl:simd;
 
@@ -1399,226 +1402,305 @@ template <spatial_vector Vec> float distance_point_to_segment(const Vec& p, cons
     return distance(p, closest_point_on_segment(p, a, b));
 }
 
-/* ============================================================
- * Plane operations
- * ============================================================ */
+/**
+ * Closest points between two 3D segments [a0, a1] and [b0, b1].
+ *
+ * Follows Ericson, "Real-Time Collision Detection": solve for the closest
+ * points on the two infinite lines, then clamp the parameters into [0, 1] and
+ * re-solve as endpoints fall outside, so segment ends are handled exactly.
+ * Degenerate (zero-length) segments collapse to the point-segment / point-point
+ * cases. The result carries the squared distance, so capsule/clearance tests can
+ * compare against a squared radius without a square root.
+ */
+inline segment_closest_result closest_points_between_segments(const vec3& a0, const vec3& a1, const vec3& b0, const vec3& b1) noexcept {
+    const float32x4_t p1 = vld1q_f32(&a0.x);
+    const float32x4_t p2 = vld1q_f32(&b0.x);
+    const float32x4_t d1 = vsubq_f32(vld1q_f32(&a1.x), p1); /* direction of segment A */
+    const float32x4_t d2 = vsubq_f32(vld1q_f32(&b1.x), p2); /* direction of segment B */
+    const float32x4_t r = vsubq_f32(p1, p2);
 
-inline plane plane_from_point_normal(const vec3& point, const vec3& normal) noexcept {
-    return {normal, dot(normal, point)};
-}
+    const auto a{dot_scalar_3(d1, d1)}; /* squared length of A */
+    const auto e{dot_scalar_3(d2, d2)}; /* squared length of B */
+    const auto f {
+        dot_scalar_3(d2, r);
 
-inline plane plane_from_points(const vec3& a, const vec3& b, const vec3& c) noexcept {
-    auto n = normalized(cross(b - a, c - a));
-    return {n, dot(n, a)};
-}
+        /* squared, since a and e are squared lengths */
+        constexpr auto eps{fp32_abs_tol * fp32_abs_tol};
 
-inline float signed_distance_to_plane(const vec3& point, const plane& pl) noexcept {
-    return dot(pl.normal, point) - pl.d;
-}
-inline float distance_to_plane(const vec3& point, const plane& pl) noexcept {
-    return std::abs(signed_distance_to_plane(point, pl));
-}
-
-inline vec3 project_onto_plane(const vec3& point, const plane& pl) noexcept {
-    float dist = signed_distance_to_plane(point, pl);
-    vec3 out{};
-    vst1q_f32(&out.x, vfmsq_n_f32(vld1q_f32(&point.x), vld1q_f32(&pl.normal.x), dist));
-    return out;
-}
-
-inline vec2 project_to_2d(const vec3& point, const plane_basis& basis) noexcept {
-    float32x4_t p = vsubq_f32(vld1q_f32(&point.x), vld1q_f32(&basis.origin.x));
-    return {dot_scalar_3(p, vld1q_f32(&basis.u.x)), dot_scalar_3(p, vld1q_f32(&basis.v.x))};
-}
-
-inline vec3 unproject_to_3d(const vec2& p2, const plane_basis& basis) noexcept {
-    vec3 out{};
-    vst1q_f32(&out.x, vfmaq_n_f32(vfmaq_n_f32(vld1q_f32(&basis.origin.x), vld1q_f32(&basis.u.x), p2.x), vld1q_f32(&basis.v.x), p2.y));
-    return out;
-}
-
-inline void project_to_2d_batch(const vec3* pts3, vec2* pts2, std::int32_t count, const plane_basis& basis) noexcept {
-    float32x4_t o = vld1q_f32(&basis.origin.x), u = vld1q_f32(&basis.u.x), v = vld1q_f32(&basis.v.x);
-    for (int i = 0; i < count; ++i) {
-        float32x4_t p = vsubq_f32(vld1q_f32(&pts3[i].x), o);
-        pts2[i] = {dot_scalar_3(p, u), dot_scalar_3(p, v)};
-    }
-}
-
-inline void unproject_to_3d_batch(const vec2* pts2, vec3* pts3, std::int32_t count, const plane_basis& basis) noexcept {
-    float32x4_t o = vld1q_f32(&basis.origin.x), u = vld1q_f32(&basis.u.x), v = vld1q_f32(&basis.v.x);
-    for (std::int32_t i{0}; i < count; ++i) {
-        vst1q_f32(&pts3[i].x, vfmaq_n_f32(vfmaq_n_f32(o, u, pts2[i].x), v, pts2[i].y));
-    }
-}
-
-/* ============================================================
- * Intersection tests
- * ============================================================ */
-
-inline segment_intersection_2d intersect_segments_2d(const vec2& a0, const vec2& a1, const vec2& b0, const vec2& b1, float epsilon = 1e-7f) noexcept {
-    vec2 da = a1 - a0, db = b1 - b0, d0 = b0 - a0;
-    const float denom{cross(da, db)};
-    if (std::abs(denom) < epsilon) {
-        return {};
-    }
-    const float inv{1.0f / denom};
-    const float t{cross(d0, db) * inv};
-    const float u{cross(d0, da) * inv};
-    if (t < 0 || t > 1 || u < 0 || u > 1) {
-        return {};
-    }
-    vec2 pt{};
-    store(vfma_n_f32(load(a0), load(da), t), pt);
-    return {pt, t, u, true};
-}
-
-inline ray_box_hit intersect_ray_box(const vec2& origin, const vec2& direction, const box2d& box) noexcept {
-    float32x2_t orig = load(origin), inv_dir = vdiv_f32(vdup_n_f32(1.0f), load(direction));
-    float32x2_t bmin, bmax;
-    load_min_max(box, bmin, bmax);
-    float32x2_t t1 = vmul_f32(vsub_f32(bmin, orig), inv_dir), t2 = vmul_f32(vsub_f32(bmax, orig), inv_dir);
-    float32x2_t t_near = vmin_f32(t1, t2), t_far = vmax_f32(t1, t2);
-    const float te{std::max(vget_lane_f32(t_near, 0), vget_lane_f32(t_near, 1))};
-    const float tx{std::min(vget_lane_f32(t_far, 0), vget_lane_f32(t_far, 1))};
-    if (te > tx || tx < 0) {
-        return {};
-    }
-    return {te, tx, true};
-}
-
-inline ray_box_hit intersect_ray_box(const vec3& origin, const vec3& direction, const box3d& box) noexcept {
-    float32x4_t orig = vld1q_f32(&origin.x), inv_dir = vdivq_f32(vdupq_n_f32(1.0f), vld1q_f32(&direction.x));
-    float32x4_t t1 = vmulq_f32(vsubq_f32(vld1q_f32(&box.min.x), orig), inv_dir), t2 = vmulq_f32(vsubq_f32(vld1q_f32(&box.max.x), orig), inv_dir);
-    float32x4_t tn = vminq_f32(t1, t2), tf = vmaxq_f32(t1, t2);
-    const float te{std::max({vgetq_lane_f32(tn, 0), vgetq_lane_f32(tn, 1), vgetq_lane_f32(tn, 2)})};
-    const float tx{std::min({vgetq_lane_f32(tf, 0), vgetq_lane_f32(tf, 1), vgetq_lane_f32(tf, 2)})};
-    if (te > tx || tx < 0) {
-        return {};
-    }
-    return {te, tx, true};
-}
-
-template <typename Vec, typename Box>
-    requires((std::is_same_v<Vec, vec2> && std::is_same_v<Box, box2d>) || (std::is_same_v<Vec, vec3> && std::is_same_v<Box, box3d>))
-bool segment_intersects_box(const Vec& a, const Vec& b, const Box& box) noexcept {
-    auto hit = intersect_ray_box(a, b - a, box);
-    return hit.hit && hit.t_entry <= 1.0f && hit.t_exit >= 0.0f;
-}
-
-inline int winding_number(const vec2& point, const vec2* verts, std::int32_t count) noexcept {
-    std::int32_t w{};
-    for (std::int32_t i{0}; i < count; ++i) {
-        const auto& v0 = verts[i];
-        const auto& v1 = verts[(i + 1) % count];
-        if (v0.y <= point.y) {
-            if (v1.y > point.y && cross(v1 - v0, point - v0) > 0) {
-                ++w;
-            }
+        float s{};
+        float t{};
+        if (a <= eps && e <= eps) {
+            /* both segments degenerate to points */
+        } else if (a <= eps) {
+            /* segment A is a point */
+            t = std::clamp(f / e, 0.0f, 1.0f);
         } else {
-            if (v1.y <= point.y && cross(v1 - v0, point - v0) < 0) {
-                --w;
+            const auto c{dot_scalar_3(d1, r)};
+            if (e <= eps) {
+                /* segment B is a point */
+                s = std::clamp(-c / a, 0.0f, 1.0f);
+            } else {
+                const auto b{dot_scalar_3(d1, d2)};
+                const auto denom{a * e - b * b}; /* >= 0; zero when segments are parallel */
+
+                /* closest point on line A to line B, clamped; parallel -> pick s = 0 */
+                s = denom > 0.0f ? std::clamp((b * f - c * e) / denom, 0.0f, 1.0f) : 0.0f;
+
+                /* closest point on line B to S1(s); re-clamp s if t leaves [0, 1] */
+                t = (b * s + f) / e;
+                if (t < 0.0f) {
+                    t = 0.0f;
+                    s = std::clamp(-c / a, 0.0f, 1.0f);
+                } else if (t > 1.0f) {
+                    t = 1.0f;
+                    s = std::clamp((b - c) / a, 0.0f, 1.0f);
+                }
             }
         }
+
+        const float32x4_t c1 = vfmaq_n_f32(p1, d1, s); /* a0 + s * d1 */
+        const float32x4_t c2 = vfmaq_n_f32(p2, d2, t); /* b0 + t * d2 */
+        const float32x4_t diff = vsubq_f32(c2, c1);
+
+        segment_closest_result out{};
+        vst1q_f32(&out.point_a.x, c1);
+        vst1q_f32(&out.point_b.x, c2);
+        out.s = s;
+        out.t = t;
+        out.distance_squared = dot_scalar_3(diff, diff);
+        return out;
     }
-    return w;
-}
 
-inline bool point_in_polygon(const vec2& p, const vec2* v, std::int32_t n) noexcept {
-    return winding_number(p, v, n) != 0;
-}
+    /* Squared distance between two 3D segments (closest approach). */
+    inline float distance_between_segments_sq(const vec3& a0, const vec3& a1, const vec3& b0, const vec3& b1) noexcept {
+        return closest_points_between_segments(a0, a1, b0, b1).distance_squared;
+    }
 
-inline segment_polygon_hit intersect_segment_polygon(const vec2& a, const vec2& b, const vec2* verts, std::int32_t count) noexcept {
-    segment_polygon_hit nearest{};
-    float best = std::numeric_limits<float>::max();
-    for (int i = 0; i < count; ++i) {
-        auto r = intersect_segments_2d(a, b, verts[i], verts[(i + 1) % count]);
-        if (r.intersects && r.t < best) {
-            best = r.t;
-            nearest = {r.point, r.t, i, true};
+    /* Distance between two 3D segments (closest approach). */
+    inline float distance_between_segments(const vec3& a0, const vec3& a1, const vec3& b0, const vec3& b1) noexcept {
+        return std::sqrt(distance_between_segments_sq(a0, a1, b0, b1));
+    }
+
+    /* ============================================================
+     * Plane operations
+     * ============================================================ */
+
+    inline plane plane_from_point_normal(const vec3& point, const vec3& normal) noexcept {
+        return {normal, dot(normal, point)};
+    }
+
+    inline plane plane_from_points(const vec3& a, const vec3& b, const vec3& c) noexcept {
+        auto n = normalized(cross(b - a, c - a));
+        return {n, dot(n, a)};
+    }
+
+    inline float signed_distance_to_plane(const vec3& point, const plane& pl) noexcept {
+        return dot(pl.normal, point) - pl.d;
+    }
+    inline float distance_to_plane(const vec3& point, const plane& pl) noexcept {
+        return std::abs(signed_distance_to_plane(point, pl));
+    }
+
+    inline vec3 project_onto_plane(const vec3& point, const plane& pl) noexcept {
+        float dist = signed_distance_to_plane(point, pl);
+        vec3 out{};
+        vst1q_f32(&out.x, vfmsq_n_f32(vld1q_f32(&point.x), vld1q_f32(&pl.normal.x), dist));
+        return out;
+    }
+
+    inline vec2 project_to_2d(const vec3& point, const plane_basis& basis) noexcept {
+        float32x4_t p = vsubq_f32(vld1q_f32(&point.x), vld1q_f32(&basis.origin.x));
+        return {dot_scalar_3(p, vld1q_f32(&basis.u.x)), dot_scalar_3(p, vld1q_f32(&basis.v.x))};
+    }
+
+    inline vec3 unproject_to_3d(const vec2& p2, const plane_basis& basis) noexcept {
+        vec3 out{};
+        vst1q_f32(&out.x, vfmaq_n_f32(vfmaq_n_f32(vld1q_f32(&basis.origin.x), vld1q_f32(&basis.u.x), p2.x), vld1q_f32(&basis.v.x), p2.y));
+        return out;
+    }
+
+    inline void project_to_2d_batch(const vec3* pts3, vec2* pts2, std::int32_t count, const plane_basis& basis) noexcept {
+        float32x4_t o = vld1q_f32(&basis.origin.x), u = vld1q_f32(&basis.u.x), v = vld1q_f32(&basis.v.x);
+        for (int i = 0; i < count; ++i) {
+            float32x4_t p = vsubq_f32(vld1q_f32(&pts3[i].x), o);
+            pts2[i] = {dot_scalar_3(p, u), dot_scalar_3(p, v)};
         }
     }
-    return nearest;
-}
 
-/* ============================================================
- * Grid operations
- * ============================================================ */
+    inline void unproject_to_3d_batch(const vec2* pts2, vec3* pts3, std::int32_t count, const plane_basis& basis) noexcept {
+        float32x4_t o = vld1q_f32(&basis.origin.x), u = vld1q_f32(&basis.u.x), v = vld1q_f32(&basis.v.x);
+        for (std::int32_t i{0}; i < count; ++i) {
+            vst1q_f32(&pts3[i].x, vfmaq_n_f32(vfmaq_n_f32(o, u, pts2[i].x), v, pts2[i].y));
+        }
+    }
 
-inline ivec2 grid_cell(const vec2& point, const vec2& grid_origin, float cell_size) noexcept {
-    float32x2_t p = vmul_n_f32(vsub_f32(load(point), load(grid_origin)), 1.0f / cell_size);
-    int32x2_t ci = vcvt_s32_f32(vrndm_f32(p));
-    return {vget_lane_s32(ci, 0), vget_lane_s32(ci, 1)};
-}
+    /* ============================================================
+     * Intersection tests
+     * ============================================================ */
 
-inline ivec3 grid_cell(const vec3& point, const vec3& grid_origin, float cell_size) noexcept {
-    float32x4_t p = vmulq_n_f32(vsubq_f32(vld1q_f32(&point.x), vld1q_f32(&grid_origin.x)), 1.0f / cell_size);
-    int32x4_t ci = vcvtq_s32_f32(vrndmq_f32(p));
-    return {vgetq_lane_s32(ci, 0), vgetq_lane_s32(ci, 1), vgetq_lane_s32(ci, 2)};
-}
+    inline segment_intersection_2d intersect_segments_2d(const vec2& a0, const vec2& a1, const vec2& b0, const vec2& b1, float epsilon = 1e-7f) noexcept {
+        vec2 da = a1 - a0, db = b1 - b0, d0 = b0 - a0;
+        const float denom{cross(da, db)};
+        if (std::abs(denom) < epsilon) {
+            return {};
+        }
+        const float inv{1.0f / denom};
+        const float t{cross(d0, db) * inv};
+        const float u{cross(d0, da) * inv};
+        if (t < 0 || t > 1 || u < 0 || u > 1) {
+            return {};
+        }
+        vec2 pt{};
+        store(vfma_n_f32(load(a0), load(da), t), pt);
+        return {pt, t, u, true};
+    }
 
-inline grid_cell_range_2d grid_cell_range(const box2d& b, const vec2& o, float s) noexcept {
-    return {grid_cell(b.min, o, s), grid_cell(b.max, o, s)};
-}
-inline grid_cell_range_3d grid_cell_range(const box3d& b, const vec3& o, float s) noexcept {
-    return {grid_cell(b.min, o, s), grid_cell(b.max, o, s)};
-}
+    inline ray_box_hit intersect_ray_box(const vec2& origin, const vec2& direction, const box2d& box) noexcept {
+        float32x2_t orig = load(origin), inv_dir = vdiv_f32(vdup_n_f32(1.0f), load(direction));
+        float32x2_t bmin, bmax;
+        load_min_max(box, bmin, bmax);
+        float32x2_t t1 = vmul_f32(vsub_f32(bmin, orig), inv_dir), t2 = vmul_f32(vsub_f32(bmax, orig), inv_dir);
+        float32x2_t t_near = vmin_f32(t1, t2), t_far = vmax_f32(t1, t2);
+        const float te{std::max(vget_lane_f32(t_near, 0), vget_lane_f32(t_near, 1))};
+        const float tx{std::min(vget_lane_f32(t_far, 0), vget_lane_f32(t_far, 1))};
+        if (te > tx || tx < 0) {
+            return {};
+        }
+        return {te, tx, true};
+    }
 
-/* ============================================================
- * Transform operations
- * ============================================================ */
+    inline ray_box_hit intersect_ray_box(const vec3& origin, const vec3& direction, const box3d& box) noexcept {
+        float32x4_t orig = vld1q_f32(&origin.x), inv_dir = vdivq_f32(vdupq_n_f32(1.0f), vld1q_f32(&direction.x));
+        float32x4_t t1 = vmulq_f32(vsubq_f32(vld1q_f32(&box.min.x), orig), inv_dir), t2 = vmulq_f32(vsubq_f32(vld1q_f32(&box.max.x), orig), inv_dir);
+        float32x4_t tn = vminq_f32(t1, t2), tf = vmaxq_f32(t1, t2);
+        const float te{std::max({vgetq_lane_f32(tn, 0), vgetq_lane_f32(tn, 1), vgetq_lane_f32(tn, 2)})};
+        const float tx{std::min({vgetq_lane_f32(tf, 0), vgetq_lane_f32(tf, 1), vgetq_lane_f32(tf, 2)})};
+        if (te > tx || tx < 0) {
+            return {};
+        }
+        return {te, tx, true};
+    }
 
-inline mat4 to_mat4(const transform& tf) noexcept {
-    mat4 r = to_mat4(tf.rotation);
-    vst1q_f32(&r.cols[0].x, vmulq_n_f32(vld1q_f32(&r.cols[0].x), tf.scale.x));
-    vst1q_f32(&r.cols[1].x, vmulq_n_f32(vld1q_f32(&r.cols[1].x), tf.scale.y));
-    vst1q_f32(&r.cols[2].x, vmulq_n_f32(vld1q_f32(&r.cols[2].x), tf.scale.z));
-    r.cols[3] = {tf.position.x, tf.position.y, tf.position.z, 1.0f};
-    return r;
-}
+    template <typename Vec, typename Box>
+        requires((std::is_same_v<Vec, vec2> && std::is_same_v<Box, box2d>) || (std::is_same_v<Vec, vec3> && std::is_same_v<Box, box3d>))
+    bool segment_intersects_box(const Vec& a, const Vec& b, const Box& box) noexcept {
+        auto hit = intersect_ray_box(a, b - a, box);
+        return hit.hit && hit.t_entry <= 1.0f && hit.t_exit >= 0.0f;
+    }
 
-inline transform inverse_uniform(const transform& tf) noexcept {
-    float is = 1.0f / tf.scale.x;
-    quat ir = conjugate(tf.rotation);
-    return {rotate(ir, {-tf.position.x * is, -tf.position.y * is, -tf.position.z * is}), ir, {is, is, is}};
-}
+    inline int winding_number(const vec2& point, const vec2* verts, std::int32_t count) noexcept {
+        std::int32_t w{};
+        for (std::int32_t i{0}; i < count; ++i) {
+            const auto& v0 = verts[i];
+            const auto& v1 = verts[(i + 1) % count];
+            if (v0.y <= point.y) {
+                if (v1.y > point.y && cross(v1 - v0, point - v0) > 0) {
+                    ++w;
+                }
+            } else {
+                if (v1.y <= point.y && cross(v1 - v0, point - v0) < 0) {
+                    --w;
+                }
+            }
+        }
+        return w;
+    }
 
-inline transform inverse(const transform& tf) noexcept {
-    float32x4_t inv_s = vdivq_f32(vdupq_n_f32(1.0f), vld1q_f32(&tf.scale.x));
-    vec3 is{};
-    vst1q_f32(&is.x, inv_s);
-    quat ir = conjugate(tf.rotation);
-    vec3 snp{};
-    vst1q_f32(&snp.x, vmulq_f32(vnegq_f32(vld1q_f32(&tf.position.x)), inv_s));
-    return {rotate(ir, snp), ir, is};
-}
+    inline bool point_in_polygon(const vec2& p, const vec2* v, std::int32_t n) noexcept {
+        return winding_number(p, v, n) != 0;
+    }
 
-inline transform compose(const transform& a, const transform& b) noexcept {
-    float32x4_t sa = vld1q_f32(&a.scale.x);
-    vec3 rs{};
-    vst1q_f32(&rs.x, vmulq_f32(sa, vld1q_f32(&b.scale.x)));
-    quat rr = a.rotation * b.rotation;
-    vec3 sbp{};
-    vst1q_f32(&sbp.x, vmulq_f32(sa, vld1q_f32(&b.position.x)));
-    vec3 rot = rotate(a.rotation, sbp);
-    vec3 rp{};
-    vst1q_f32(&rp.x, vaddq_f32(vld1q_f32(&a.position.x), vld1q_f32(&rot.x)));
-    return {rp, rr, rs};
-}
+    inline segment_polygon_hit intersect_segment_polygon(const vec2& a, const vec2& b, const vec2* verts, std::int32_t count) noexcept {
+        segment_polygon_hit nearest{};
+        float best = std::numeric_limits<float>::max();
+        for (int i = 0; i < count; ++i) {
+            auto r = intersect_segments_2d(a, b, verts[i], verts[(i + 1) % count]);
+            if (r.intersects && r.t < best) {
+                best = r.t;
+                nearest = {r.point, r.t, i, true};
+            }
+        }
+        return nearest;
+    }
 
-inline vec3 transform_point(const transform& tf, const vec3& pt) noexcept {
-    vec3 sc{};
-    vst1q_f32(&sc.x, vmulq_f32(vld1q_f32(&tf.scale.x), vld1q_f32(&pt.x)));
-    vec3 rot = rotate(tf.rotation, sc);
-    vec3 out{};
-    vst1q_f32(&out.x, vaddq_f32(vld1q_f32(&rot.x), vld1q_f32(&tf.position.x)));
-    return out;
-}
+    /* ============================================================
+     * Grid operations
+     * ============================================================ */
 
-inline vec3 transform_direction(const transform& tf, const vec3& dir) noexcept {
-    vec3 sc{};
-    vst1q_f32(&sc.x, vmulq_f32(vld1q_f32(&tf.scale.x), vld1q_f32(&dir.x)));
-    return rotate(tf.rotation, sc);
-}
+    inline ivec2 grid_cell(const vec2& point, const vec2& grid_origin, float cell_size) noexcept {
+        float32x2_t p = vmul_n_f32(vsub_f32(load(point), load(grid_origin)), 1.0f / cell_size);
+        int32x2_t ci = vcvt_s32_f32(vrndm_f32(p));
+        return {vget_lane_s32(ci, 0), vget_lane_s32(ci, 1)};
+    }
+
+    inline ivec3 grid_cell(const vec3& point, const vec3& grid_origin, float cell_size) noexcept {
+        float32x4_t p = vmulq_n_f32(vsubq_f32(vld1q_f32(&point.x), vld1q_f32(&grid_origin.x)), 1.0f / cell_size);
+        int32x4_t ci = vcvtq_s32_f32(vrndmq_f32(p));
+        return {vgetq_lane_s32(ci, 0), vgetq_lane_s32(ci, 1), vgetq_lane_s32(ci, 2)};
+    }
+
+    inline grid_cell_range_2d grid_cell_range(const box2d& b, const vec2& o, float s) noexcept {
+        return {grid_cell(b.min, o, s), grid_cell(b.max, o, s)};
+    }
+    inline grid_cell_range_3d grid_cell_range(const box3d& b, const vec3& o, float s) noexcept {
+        return {grid_cell(b.min, o, s), grid_cell(b.max, o, s)};
+    }
+
+    /* ============================================================
+     * Transform operations
+     * ============================================================ */
+
+    inline mat4 to_mat4(const transform& tf) noexcept {
+        mat4 r = to_mat4(tf.rotation);
+        vst1q_f32(&r.cols[0].x, vmulq_n_f32(vld1q_f32(&r.cols[0].x), tf.scale.x));
+        vst1q_f32(&r.cols[1].x, vmulq_n_f32(vld1q_f32(&r.cols[1].x), tf.scale.y));
+        vst1q_f32(&r.cols[2].x, vmulq_n_f32(vld1q_f32(&r.cols[2].x), tf.scale.z));
+        r.cols[3] = {tf.position.x, tf.position.y, tf.position.z, 1.0f};
+        return r;
+    }
+
+    inline transform inverse_uniform(const transform& tf) noexcept {
+        float is = 1.0f / tf.scale.x;
+        quat ir = conjugate(tf.rotation);
+        return {rotate(ir, {-tf.position.x * is, -tf.position.y * is, -tf.position.z * is}), ir, {is, is, is}};
+    }
+
+    inline transform inverse(const transform& tf) noexcept {
+        float32x4_t inv_s = vdivq_f32(vdupq_n_f32(1.0f), vld1q_f32(&tf.scale.x));
+        vec3 is{};
+        vst1q_f32(&is.x, inv_s);
+        quat ir = conjugate(tf.rotation);
+        vec3 snp{};
+        vst1q_f32(&snp.x, vmulq_f32(vnegq_f32(vld1q_f32(&tf.position.x)), inv_s));
+        return {rotate(ir, snp), ir, is};
+    }
+
+    inline transform compose(const transform& a, const transform& b) noexcept {
+        float32x4_t sa = vld1q_f32(&a.scale.x);
+        vec3 rs{};
+        vst1q_f32(&rs.x, vmulq_f32(sa, vld1q_f32(&b.scale.x)));
+        quat rr = a.rotation * b.rotation;
+        vec3 sbp{};
+        vst1q_f32(&sbp.x, vmulq_f32(sa, vld1q_f32(&b.position.x)));
+        vec3 rot = rotate(a.rotation, sbp);
+        vec3 rp{};
+        vst1q_f32(&rp.x, vaddq_f32(vld1q_f32(&a.position.x), vld1q_f32(&rot.x)));
+        return {rp, rr, rs};
+    }
+
+    inline vec3 transform_point(const transform& tf, const vec3& pt) noexcept {
+        vec3 sc{};
+        vst1q_f32(&sc.x, vmulq_f32(vld1q_f32(&tf.scale.x), vld1q_f32(&pt.x)));
+        vec3 rot = rotate(tf.rotation, sc);
+        vec3 out{};
+        vst1q_f32(&out.x, vaddq_f32(vld1q_f32(&rot.x), vld1q_f32(&tf.position.x)));
+        return out;
+    }
+
+    inline vec3 transform_direction(const transform& tf, const vec3& dir) noexcept {
+        vec3 sc{};
+        vst1q_f32(&sc.x, vmulq_f32(vld1q_f32(&tf.scale.x), vld1q_f32(&dir.x)));
+        return rotate(tf.rotation, sc);
+    }
 
 } // namespace sgl
