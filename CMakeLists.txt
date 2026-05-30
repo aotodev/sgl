@@ -190,6 +190,7 @@ target_sources(${PROJECT_NAME}
 # Tests
 # ---------------------------------------------------------------------------------------
 if(SGL_TESTS)
+    enable_testing() # at the top level so `ctest --test-dir build` is the CTest root
     add_subdirectory(tests)
 endif()
 
