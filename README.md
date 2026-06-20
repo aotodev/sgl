@@ -1,14 +1,14 @@
 # sgl
 
-A C++20 **module-based, SIMD-accelerated computational geometry library**.
+A C++20 module-based, SIMD-accelerated computational geometry library.
 
-`sgl` is a SIMD-first library for fixed-size linear algebra and geometry —
+`sgl` is a SIMD-first library for fixed-size linear algebra and geometry:
 vectors, matrices, quaternions, axis-aligned boxes, planes, transforms, and the
 intersection and distance queries built on them. Every operation is written
 directly against SSE/AVX2 or NEON intrinsics, and C++20 templates collapse the
 per-type and per-dimension boilerplate, so the API surface stays broad while the
 implementation stays compact. It covers the everyday graphics and geometry math,
-and is at its strongest in the spatial queries that run in tight loops —
+and is at its strongest in the spatial queries that run in tight loops:
 containment, closest-point, and intersection over many primitives.
 
 It ships as a single C++20 named module (`sgl`). There are no headers to include
@@ -46,26 +46,26 @@ compiles unchanged against the other.
 
 ## What it supports
 
-- **Vectors** — `vec2`, `vec3`, `vec4` (and integer `ivec2`/`ivec3`): full
+- **Vectors**: `vec2`, `vec3`, `vec4` (and integer `ivec2`/`ivec3`): full
   arithmetic operators, dot/cross, length, several normalization variants
   (precise, fast-reciprocal, Newton-Raphson, and zero-safe), projection,
   reflection, clamp/lerp/min/max/abs, distance, angle, and parallel/perpendicular
   tests.
-- **Matrices** — `mat2` and `mat4` (column-major): add/sub/scale/negate, multiply,
+- **Matrices**: `mat2` and `mat4` (column-major): add/sub/scale/negate, multiply,
   transpose, determinant, trace, a general inverse plus dedicated closed-form
   rigid and uniform-affine inverses; `mat3` is carried as a rotation/normal block
   with `mat3`<->`mat4` conversions.
-- **Quaternions** — `quat`: Hamilton product, conjugate/inverse, normalization,
+- **Quaternions**: `quat`: Hamilton product, conjugate/inverse, normalization,
   vector rotation, axis-angle construction, matrix conversions, and angular
   distance.
-- **Axis-aligned boxes** — `box2d`, `box3d`: validity, center/extents,
+- **Axis-aligned boxes**: `box2d`, `box3d`: validity, center/extents,
   translate/scale/dilate, overlap/containment, intersection/merge/expand,
   closest-point and distance queries, area/volume/surface-area.
-- **Planes & transforms** — `plane`, `plane_basis`, `transform`: plane
+- **Planes & transforms**: `plane`, `plane_basis`, `transform`: plane
   construction and signed-distance/projection queries, 3D<->2D plane-basis
   projection (with batch variants), and full TRS transform composition,
   inversion, and point/direction application.
-- **Intersection & spatial queries** — 2D segment intersection, ray– and
+- **Intersection & spatial queries**: 2D segment intersection, ray– and
   segment–AABB tests, closest distance between two 3D segments (for
   capsule/clearance checks), point-in-polygon (winding number), segment–polygon,
   and integer grid-cell mapping.
@@ -74,7 +74,7 @@ compiles unchanged against the other.
 
 - **SIMD-first, one API across backends.** Every operation is built on intrinsics
   rather than scalar fallbacks, and the AVX2 and NEON backends export identical
-  names — the SIMD layer is an implementation detail, not part of the surface.
+  names; the SIMD layer is an implementation detail, not part of the surface.
   Templates carry the weight that boilerplate usually does, which is why the
   surface above fits in a compact codebase.
 - **Closed-form transform inverses.** Rigid (`R | t`) and uniform-scale affine
@@ -84,29 +84,10 @@ compiles unchanged against the other.
   result for a fraction of the arithmetic; the general `inverse` remains available
   when the matrix is arbitrary.
 
-## A note on the API: pass-by-`const&`
-
-Public functions take their vector/matrix arguments by `const T&` rather than by
-value. This is deliberate. The hot internals operate on register types
-(`__m128` / `float32x4_t`) passed *by value* — that's where register passing
-matters — while the user-facing aggregates (`vec*`, `mat*`, `quat`, ...) are
-passed by reference.
-
-The reasoning: under both the System V (x86-64) and AAPCS (AArch64) ABIs, a
-16-byte float aggregate passed by value does not arrive in a single vector
-register — it is split across two (SysV) or up to four (AAPCS) registers and must
-be recombined before any SIMD op, and aggregates larger than 16 bytes (`mat3`,
-`mat4`, `box3d`, `transform`, ...) are passed indirectly with a forced copy anyway.
-So by-value buys nothing for these types and can cost a little. More importantly,
-because the operations are `inline` and the templates instantiate in the caller,
-inlining makes the calling convention disappear at the vast majority of call
-sites — so the signature choice is a wash on the hot path and `const&` wins
-cleanly on the cold one.
-
 ## Requirements
 
-- **CMake** ≥ 3.30 (for `CXX_MODULES` install/export support)
-- **GCC** ≥ 14, **Clang** ≥ 17, or **MSVC** ≥ 19.40 (VS 2022 17.10) — each is the
+- **CMake** >= 3.30 (for `CXX_MODULES` install/export support)
+- **GCC** >= 14, **Clang** >= 17, or **MSVC** >= 19.40 (VS 2022 17.10); each is the
   floor for C++20 named modules plus CWG 2518 (`static_assert(false)` in
   uninstantiated template branches)
 - A C++20 standard library and toolchain with named-module support
@@ -118,7 +99,7 @@ cmake -B build -G Ninja
 cmake --build build
 ```
 
-> Use the **Ninja** or **Visual Studio** generator — CMake's C++20 module support
+> Use the **Ninja** or **Visual Studio** generator.  CMake's C++20 module support
 > does not work with the Makefiles generators.
 
 ### Toolchains
@@ -134,7 +115,7 @@ CXX=g++ cmake -B build -G Ninja
 # Clang + libc++
 CXX=clang++ cmake -B build -G Ninja -DCMAKE_CXX_FLAGS="-stdlib=libc++"
 
-# MSVC (x64 Native Tools prompt, or a cross wrapper) — Ninja generator
+# MSVC (x64 Native Tools prompt, or a cross wrapper), Ninja generator
 cmake -B build -G Ninja
 ```
 
