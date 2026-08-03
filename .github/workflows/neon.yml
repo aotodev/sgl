@@ -2,7 +2,7 @@
 #
 # The toolchain file sets CMAKE_CROSSCOMPILING_EMULATOR, so gtest_discover_tests and
 # ctest invoke the cross-built binaries through qemu with no extra plumbing here.
-name: aarch64
+name: neon
 
 on:
   push:
@@ -12,7 +12,7 @@ on:
       - 'tests/**'
       - 'cmake/**'
       - '**/CMakeLists.txt'
-      - '.github/workflows/aarch64.yml'
+      - '.github/workflows/neon.yml'
   pull_request:
 
 permissions:
