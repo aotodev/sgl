@@ -112,17 +112,17 @@ endif()
 # ---------------------------------------------------------------------------------------
 # Compiler warnings
 # ---------------------------------------------------------------------------------------
-add_library(project_flags INTERFACE)
+add_library(sgl_project_flags INTERFACE)
 
 # MSVC is true for cl.exe and for clang-cl; both take the /-style warning flags.
 if(MSVC)
-    target_compile_options(project_flags INTERFACE
+    target_compile_options(sgl_project_flags INTERFACE
         /W4
         /permissive- # conformance mode (also wanted by the modules front-end)
         /WX
     )
 else()
-    target_compile_options(project_flags INTERFACE
+    target_compile_options(sgl_project_flags INTERFACE
         -Wall
         -Wpedantic
         -Wextra
@@ -138,7 +138,7 @@ else()
     )
 
     if(CMAKE_CXX_COMPILER_ID MATCHES "Clang")
-        target_compile_options(project_flags INTERFACE
+        target_compile_options(sgl_project_flags INTERFACE
             -Wmove
             # Tolerate the version-specific -Wno-* below: the exposure warning
             # group was renamed/added across the supported Clang range (>= 17),
@@ -153,16 +153,18 @@ else()
             -Wno-TU-local-entity-exposure               # Clang 22+
         )
     elseif(CMAKE_CXX_COMPILER_ID STREQUAL "GNU")
-        target_compile_options(project_flags INTERFACE
+        target_compile_options(sgl_project_flags INTERFACE
             -Wpessimizing-move
             -Wredundant-move
         )
     endif()
 endif()
 
-# BUILD_INTERFACE: project flags/warnings are a build-only concern and must
-# not leak into the installed export or onto consumers.
-target_link_libraries(${PROJECT_NAME} PRIVATE $<BUILD_INTERFACE:project_flags>)
+# Top-level only: never impose -Werror on a consumer's build. BUILD_INTERFACE keeps
+# it out of the installed export as well.
+if(PROJECT_IS_TOP_LEVEL)
+    target_link_libraries(${PROJECT_NAME} PRIVATE $<BUILD_INTERFACE:sgl_project_flags>)
+endif()
 
 # ---------------------------------------------------------------------------------------
 # Module interface units
@@ -189,7 +191,9 @@ target_sources(${PROJECT_NAME}
 # ---------------------------------------------------------------------------------------
 # Tests
 # ---------------------------------------------------------------------------------------
-if(SGL_TESTS)
+# Top-level only: a consumer must not get our suites, and `unit_tests` would collide
+# with theirs.
+if(PROJECT_IS_TOP_LEVEL AND SGL_TESTS)
     enable_testing() # at the top level so `ctest --test-dir build` is the CTest root
     add_subdirectory(tests)
 endif()

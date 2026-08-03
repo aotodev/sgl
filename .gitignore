@@ -28,3 +28,6 @@ compile_commands.json
 
 # Debug
 *.dSYM/
+
+# Personal notes, never shared
+*.local.md
