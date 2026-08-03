@@ -1,0 +1,18 @@
+# Toolchain image for sgl CI: native gcc and clang for the AVX2 path, plus the
+# aarch64 cross toolchain and qemu-user for the NEON path.
+FROM archlinux:latest
+
+# Links the published package to the repo, so it inherits the repo's permissions.
+LABEL org.opencontainers.image.source=https://github.com/aotodev/sgl
+
+RUN pacman -Syu --noconfirm \
+        clang llvm lld \
+        gcc \
+        cmake ninja \
+        git \
+        qemu-user \
+        aarch64-linux-gnu-gcc aarch64-linux-gnu-glibc \
+    && pacman -Scc --noconfirm
+
+# aarch64-linux-gnu-glibc: target libc plus ld-linux-aarch64.so.1, needed both to link
+#   the cross-built tests and for qemu-aarch64 -L to run them.
