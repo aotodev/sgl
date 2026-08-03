@@ -1,5 +1,9 @@
 # sgl
 
+[![avx-gcc](https://github.com/aotodev/sgl/actions/workflows/avx-gcc.yml/badge.svg?branch=master)](https://github.com/aotodev/sgl/actions/workflows/avx-gcc.yml)
+[![avx-clang](https://github.com/aotodev/sgl/actions/workflows/avx-clang.yml/badge.svg?branch=master)](https://github.com/aotodev/sgl/actions/workflows/avx-clang.yml)
+[![aarch64](https://github.com/aotodev/sgl/actions/workflows/aarch64.yml/badge.svg?branch=master)](https://github.com/aotodev/sgl/actions/workflows/aarch64.yml)
+
 A C++20 module-based, SIMD-accelerated computational geometry library.
 
 `sgl` is a SIMD-first library for fixed-size linear algebra and geometry:
