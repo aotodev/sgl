@@ -35,7 +35,7 @@ TEST(Geometry, DistancePointToSegmentSq) {
 }
 
 TEST(Geometry, SegmentSegment_Skew) {
-    /* A along x at z=0; B along y at z=2 — perpendicular, offset by 2 in z */
+    /* A along x at z=0; B along y at z=2: perpendicular, offset by 2 in z */
     auto r = sgl::closest_points_between_segments(sgl::vec3{-1, 0, 0}, sgl::vec3{1, 0, 0}, sgl::vec3{0, -1, 2}, sgl::vec3{0, 1, 2});
     EXPECT_NEAR(r.distance_squared, 4.0f, 1e-4f);
     EXPECT_NEAR(r.point_a.x, 0.0f, 1e-4f); /* crossing is over the origin in xy */
@@ -44,19 +44,19 @@ TEST(Geometry, SegmentSegment_Skew) {
 }
 
 TEST(Geometry, SegmentSegment_Crossing) {
-    /* Two segments that intersect at the origin → distance 0 */
+    /* Two segments that intersect at the origin, so distance 0 */
     auto r = sgl::closest_points_between_segments(sgl::vec3{-1, -1, 0}, sgl::vec3{1, 1, 0}, sgl::vec3{-1, 1, 0}, sgl::vec3{1, -1, 0});
     EXPECT_NEAR(r.distance_squared, 0.0f, 1e-5f);
 }
 
 TEST(Geometry, SegmentSegment_Parallel) {
-    /* Parallel, offset by 3 in y; overlapping in x → gap is the perpendicular 3 */
+    /* Parallel, offset by 3 in y; overlapping in x, so the gap is the perpendicular 3 */
     auto r = sgl::closest_points_between_segments(sgl::vec3{0, 0, 0}, sgl::vec3{4, 0, 0}, sgl::vec3{1, 3, 0}, sgl::vec3{5, 3, 0});
     EXPECT_NEAR(r.distance_squared, 9.0f, 1e-4f);
 }
 
 TEST(Geometry, SegmentSegment_EndpointClamped) {
-    /* Colinear, disjoint along x: [0,1] and [3,4] → nearest ends are 1 and 3 */
+    /* Colinear, disjoint along x: [0,1] and [3,4], so nearest ends are 1 and 3 */
     auto r = sgl::closest_points_between_segments(sgl::vec3{0, 0, 0}, sgl::vec3{1, 0, 0}, sgl::vec3{3, 0, 0}, sgl::vec3{4, 0, 0});
     EXPECT_NEAR(r.distance_squared, 4.0f, 1e-4f);
     EXPECT_NEAR(r.s, 1.0f, 1e-4f);
@@ -64,7 +64,7 @@ TEST(Geometry, SegmentSegment_EndpointClamped) {
 }
 
 TEST(Geometry, SegmentSegment_DegeneratePoint) {
-    /* A is a zero-length segment (a point) at (0,5,0); B along x → distance 5 */
+    /* A is a zero-length segment (a point) at (0,5,0); B along x, so distance 5 */
     auto r = sgl::closest_points_between_segments(sgl::vec3{0, 5, 0}, sgl::vec3{0, 5, 0}, sgl::vec3{-4, 0, 0}, sgl::vec3{4, 0, 0});
     EXPECT_NEAR(r.distance_squared, 25.0f, 1e-4f);
     EXPECT_NEAR(r.point_b.x, 0.0f, 1e-4f); /* foot of perpendicular at x=0 */

@@ -1,11 +1,11 @@
 /**
  * @file neon.cppm
  * @brief NEON SIMD implementations of all vector, matrix, quaternion, box, and geometric operations.
- *        Targets Apple Silicon (M1–M5), ARMv8.2-A+.
+ *        Targets Apple Silicon (M1 to M5), ARMv8.2-A+.
  *
  * Uses native float32x2_t (D-form) for vec2 and box2d corners, and float32x4_t (Q-form)
  * for vec3, vec4, mat4 columns, quaternions. On Apple Silicon, D-form and Q-form arithmetic
- * have identical latency and throughput — both execute on the same SIMD pipes.
+ * have identical latency and throughput: both execute on the same SIMD pipes.
  */
 module;
 
@@ -202,7 +202,7 @@ inline std::int32_t n_movemask(uint32x4_t v) noexcept {
 }
 
 /* ============================================================
- * Load / Store — vec2 uses D-form natively
+ * Load / Store: vec2 uses D-form natively
  * ============================================================ */
 
 inline float32x2_t load(const vec2& v) noexcept {
@@ -260,7 +260,7 @@ template <typename Box> using box_vec_t = typename box_traits<Box>::vec_type;
 template <typename Box> using box_reg_t = typename box_traits<Box>::reg_type;
 
 /* ============================================================
- * Box load/store — box2d uses D-form pairs natively
+ * Box load/store: box2d uses D-form pairs natively
  * ============================================================ */
 
 inline void load_min_max(const box2d& b, float32x2_t& out_min, float32x2_t& out_max) noexcept {
@@ -292,7 +292,7 @@ template <typename Box> Box make_box(const box_reg_t<Box> lo, const box_reg_t<Bo
 }
 
 /* ============================================================
- * Safe divisor — only needed for vec3 (pad lane)
+ * Safe divisor, only needed for vec3 (pad lane)
  * vec2 has no padding, vec4 uses all lanes.
  * ============================================================ */
 
@@ -321,7 +321,7 @@ template <typename T> consteval std::int32_t lane_mask() noexcept {
 }
 
 /* ============================================================
- * Dot product — native D-form for vec2, Q-form for vec3/vec4
+ * Dot product: native D-form for vec2, Q-form for vec3/vec4
  * ============================================================ */
 
 /* Scalar result */
@@ -380,7 +380,7 @@ template <typename Box> float box_dot_scalar(box_reg_t<Box> a, box_reg_t<Box> b)
 }
 
 /* ============================================================
- * Newton-Raphson refined rsqrt — both D-form and Q-form
+ * Newton-Raphson refined rsqrt, both D-form and Q-form
  * ============================================================ */
 
 inline float32x2_t rsqrt_nr(float32x2_t v) noexcept {
@@ -485,7 +485,7 @@ template <vector Vec> bool any_nearly_zero(const Vec& val, const float tol = fp3
     const auto v = load(val);
     const auto ok = n_clt(n_abs(v), n_dup(tol, v));
     constexpr auto mask{lane_mask<Vec>()};
-    return (n_movemask(ok) & mask) != 0;
+    return static_cast<bool>(n_movemask(ok) & mask);
 }
 
 /* ============================================================
@@ -782,7 +782,7 @@ template <vector Vec> bool all_less_than(const Vec& a, const Vec& b) noexcept {
 
 template <vector Vec> bool any_greater_than(const Vec& a, const Vec& b) noexcept {
     constexpr auto mask{lane_mask<Vec>()};
-    return (n_movemask(n_cgt(load(a), load(b))) & mask) != 0;
+    return static_cast<bool>(n_movemask(n_cgt(load(a), load(b))) & mask);
 }
 
 inline bool contains(const box3d& box, const vec3& point) {
@@ -793,7 +793,7 @@ inline bool contains(const box3d& box, const vec3& point) {
  * Cross products
  * ============================================================ */
 
-/* vec2: a.x*b.y - a.y*b.x — native D-form */
+/* vec2: a.x*b.y - a.y*b.x, native D-form */
 inline float cross(const vec2& a, const vec2& b) noexcept {
     float32x2_t va = load(a);
     float32x2_t vb = load(b);
@@ -821,7 +821,7 @@ template <> inline bool is_parallel<vec3>(const vec3& a, const vec3& b, float to
     return nearly_zero(cross(a, b), tol);
 }
 
-/* vec2 perpendicular: {-y, x} — D-form */
+/* vec2 perpendicular: {-y, x}, D-form */
 inline vec2 perpendicular(const vec2& v) noexcept {
     float32x2_t loaded = load(v);
     float32x2_t yx = vrev64_f32(loaded); /* {y, x} */
@@ -852,7 +852,7 @@ template <vector Vec> float angle_between(const Vec& a, const Vec& b) noexcept {
 }
 
 /* ============================================================
- * Box operations — generic over box2d (D-form) and box3d (Q-form)
+ * Box operations, generic over box2d (D-form) and box3d (Q-form)
  * ============================================================ */
 
 template <box_type Box> bool is_valid(const Box& b) noexcept {
@@ -925,7 +925,7 @@ template <box_type Box> bool overlaps(const Box& a, const Box& b) noexcept {
     load_min_max(a, a_lo, a_hi);
     load_min_max(b, b_lo, b_hi);
     constexpr auto mask = box_traits<Box>::lane_mask;
-    return ((n_movemask(n_cgt(a_lo, b_hi)) | n_movemask(n_cgt(b_lo, a_hi))) & mask) == 0;
+    return !((n_movemask(n_cgt(a_lo, b_hi)) | n_movemask(n_cgt(b_lo, a_hi))) & mask);
 }
 
 template <box_type Box> bool contains(const Box& outer, const Box& inner) noexcept {
@@ -986,7 +986,7 @@ template <box_type Box> box_vec_t<Box> closest_point(const Box& b, const box_vec
 }
 
 /* ============================================================
- * box2d specific — native D-form
+ * box2d specific, native D-form
  * ============================================================ */
 
 inline box2d box2d_from_center_half(const vec2& c, const vec2& half_ext) noexcept {
@@ -1275,9 +1275,9 @@ inline mat4 set_translation(const mat4& m, const vec3& t) noexcept {
 
 /**
  * Construct a unit quaternion that rotates by `angle` (radians) around `axis`.
- * The axis need not be unit length — it is normalized internally. Identity is returned for a zero axis.
+ * The axis need not be unit length: it is normalized internally. Identity is returned for a zero axis.
  *
- *   q = (sin(θ/2) * normalize(axis), cos(θ/2))
+ *   q = (sin(angle/2) * normalize(axis), cos(angle/2))
  */
 inline quat quat_from_axis_angle(const vec3& axis, const float angle) noexcept {
     const auto half{angle * 0.5f};
@@ -1606,7 +1606,7 @@ inline int winding_number(const vec2& point, const vec2* verts, std::int32_t cou
 }
 
 inline bool point_in_polygon(const vec2& p, const vec2* v, std::int32_t n) noexcept {
-    return winding_number(p, v, n) != 0;
+    return static_cast<bool>(winding_number(p, v, n));
 }
 
 inline segment_polygon_hit intersect_segment_polygon(const vec2& a, const vec2& b, const vec2* verts, std::int32_t count) noexcept {

@@ -1,7 +1,5 @@
-# AArch64 cross build + tests (the NEON path), run under qemu-user.
-#
-# The toolchain file sets CMAKE_CROSSCOMPILING_EMULATOR, so gtest_discover_tests and
-# ctest invoke the cross-built binaries through qemu with no extra plumbing here.
+# AArch64 cross build + tests (the NEON path). No qemu plumbing here: the toolchain
+# file sets CMAKE_CROSSCOMPILING_EMULATOR, which ctest honours.
 name: neon
 
 on:

@@ -5,6 +5,8 @@ FROM archlinux:latest
 # Links the published package to the repo, so it inherits the repo's permissions.
 LABEL org.opencontainers.image.source=https://github.com/aotodev/sgl
 
+# aarch64-linux-gnu-glibc: ships ld-linux-aarch64.so.1, needed to link the cross
+# build and to run it under qemu -L.
 RUN pacman -Syu --noconfirm \
         clang llvm lld \
         gcc \
@@ -13,6 +15,3 @@ RUN pacman -Syu --noconfirm \
         qemu-user \
         aarch64-linux-gnu-gcc aarch64-linux-gnu-glibc \
     && pacman -Scc --noconfirm
-
-# aarch64-linux-gnu-glibc: target libc plus ld-linux-aarch64.so.1, needed both to link
-#   the cross-built tests and for qemu-aarch64 -L to run them.

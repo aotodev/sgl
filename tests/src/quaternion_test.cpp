@@ -94,8 +94,8 @@ TEST(Quat, RotateIdentity) {
 }
 
 TEST(Quat, RotateAxisAngle) {
-    /* 90° around Z: should map (1,0,0) → (0,1,0) */
-    sgl::quat q = sgl::quat_from_axis_angle(sgl::vec3{0, 0, 1}, std::acos(-1.0f) * 0.5f); /* 90° around Z */
+    /* 90 degrees around Z: should map (1,0,0) to (0,1,0) */
+    sgl::quat q = sgl::quat_from_axis_angle(sgl::vec3{0, 0, 1}, std::acos(-1.0f) * 0.5f); /* 90 degrees around Z */
     auto r = sgl::rotate(q, sgl::vec3{1, 0, 0});
     EXPECT_NEAR(r.x, 0.0f, 1e-5f);
     EXPECT_NEAR(r.y, 1.0f, 1e-5f);
@@ -140,7 +140,7 @@ TEST(Quat, NearlyEqual) {
 
 TEST(Quat, AngleBetween) {
     sgl::quat q1 = sgl::quat_from_axis_angle(sgl::vec3{0, 0, 1}, 0.0f);
-    sgl::quat q2 = sgl::quat_from_axis_angle(sgl::vec3{0, 0, 1}, std::acos(-1.0f) * 0.5f); /* 90° */
+    sgl::quat q2 = sgl::quat_from_axis_angle(sgl::vec3{0, 0, 1}, std::acos(-1.0f) * 0.5f); /* 90 degrees */
     auto angle = sgl::angle_between(q1, q2);
     EXPECT_NEAR(angle, std::acos(-1.0f) * 0.5f, 1e-4f);
 }

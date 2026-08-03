@@ -28,16 +28,8 @@ endif()
 set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 
 # ---------------------------------------------------------------------------------------
-# Compiler support check
-#
-# Two floors are folded into each minimum below:
-#   * C++20 named modules.
-#   * CWG 2518 — permits `static_assert(false)` in an uninstantiated template
-#     branch (used in the consteval lane-mask helpers). It is a defect report,
-#     so it applies retroactively, but only on compilers that implemented it:
-#     GCC 13, Clang 17, MSVC 19.40 (VS 2022 17.10). MSVC was the laggard here.
-# The binding constraint per toolchain: GCC modules need 14 (> CWG's 13), Clang
-# needs 17 for CWG 2518 (> its module floor of 16), MSVC needs 19.40.
+# Compiler support check: each minimum is the higher of the C++20 named-module floor
+# and the CWG 2518 floor.
 # ---------------------------------------------------------------------------------------
 if(CMAKE_CXX_COMPILER_ID MATCHES "Clang")
     if(CMAKE_CXX_COMPILER_VERSION VERSION_LESS "17")
@@ -82,23 +74,15 @@ option(SGL_TESTS "Build sgl tests" OFF)
 option(SGL_INSTALL "Generate install + find_package() rules" "${PROJECT_IS_TOP_LEVEL}")
 
 # ---------------------------------------------------------------------------------------
-# Library (always STATIC)
-#
-# The real interface is the C++20 module, which every consumer recompiles from
-# the shipped module sources against their own toolchain (BMIs are not portable).
-# The compiled archive is nearly empty: the API is templates plus inline SIMD
-# functions, all instantiated/inlined in the consumer's translation units. There
-# is therefore no stable ABI and no meaningful binary payload to ship as a shared
-# object, so a SHARED build would buy nothing.
+# Library (always STATIC: the module interface is the real deliverable)
 # ---------------------------------------------------------------------------------------
 add_library(${PROJECT_NAME} STATIC)
 add_library(${PROJECT_NAME}::${PROJECT_NAME} ALIAS ${PROJECT_NAME})
 
 target_compile_features(${PROJECT_NAME} PUBLIC cxx_std_20)
 
-# AVX2 + FMA on x86-64. PUBLIC so the installed export carries it to consumers,
-# whose recompilation of the (inline) module interface needs the same ISA.
-# Keyed on the frontend variant (not the compiler id) so clang-cl gets /arch:AVX2.
+# PUBLIC: consumers recompile the inline module interface and need the same ISA.
+# Keyed on the frontend variant, not the compiler id, so clang-cl gets /arch:AVX2.
 # MSVC folds FMA3 into /arch:AVX2; there is no separate /arch:FMA.
 target_compile_options(${PROJECT_NAME} PUBLIC
     "$<$<AND:$<BOOL:${IS_X86_64}>,$<CXX_COMPILER_FRONTEND_VARIANT:GNU>>:-mavx2;-mfma>"
@@ -138,17 +122,11 @@ else()
     )
 
     if(CMAKE_CXX_COMPILER_ID MATCHES "Clang")
+        # Both TU-local-entity spellings are listed, so -Wno-unknown-warning-option
+        # must come first: the name this Clang lacks must not become a -Werror.
         target_compile_options(sgl_project_flags INTERFACE
             -Wmove
-            # Tolerate the version-specific -Wno-* below: the exposure warning
-            # group was renamed/added across the supported Clang range (>= 17),
-            # so a name absent on a given version must not become a -Werror.
             -Wno-unknown-warning-option
-            # SIMD intrinsics in <immintrin.h> are static inline (TU-local). Using
-            # them in module-interface inline functions/templates "exposes" them,
-            # which Clang flags. They are always_inline builtins, so nothing
-            # actually crosses the link boundary, unavoidable and benign for a
-            # SIMD module. The group is spelled differently across versions:
             -Wno-reference-tu-local-entity-in-other-tu  # Clang <= 21
             -Wno-TU-local-entity-exposure               # Clang 22+
         )
@@ -160,8 +138,8 @@ else()
     endif()
 endif()
 
-# Top-level only: never impose -Werror on a consumer's build. BUILD_INTERFACE keeps
-# it out of the installed export as well.
+# Top-level only: never impose -Werror on a consumer's build. BUILD_INTERFACE covers
+# the installed export; the guard covers add_subdirectory, where it is still active.
 if(PROJECT_IS_TOP_LEVEL)
     target_link_libraries(${PROJECT_NAME} PRIVATE $<BUILD_INTERFACE:sgl_project_flags>)
 endif()
@@ -191,8 +169,7 @@ target_sources(${PROJECT_NAME}
 # ---------------------------------------------------------------------------------------
 # Tests
 # ---------------------------------------------------------------------------------------
-# Top-level only: a consumer must not get our suites, and `unit_tests` would collide
-# with theirs.
+# Top-level only: `unit_tests` would collide with a consumer's own target.
 if(PROJECT_IS_TOP_LEVEL AND SGL_TESTS)
     enable_testing() # at the top level so `ctest --test-dir build` is the CTest root
     add_subdirectory(tests)
@@ -200,12 +177,6 @@ endif()
 
 # ---------------------------------------------------------------------------------------
 # Install + find_package(sgl) support
-#
-# Installs the arch-selected module source (consumers recompile the BMI with a
-# compatible toolchain), the static archive, and a package config. The exported
-# target carries the AVX2/FMA usage requirement so importers compile the module
-# interface with the matching ISA. add_subdirectory / FetchContent remains the
-# most robust way to consume a module library.
 # ---------------------------------------------------------------------------------------
 if(SGL_INSTALL)
     include(GNUInstallDirs)
@@ -214,8 +185,7 @@ if(SGL_INSTALL)
     set(_sgl_moddir ${CMAKE_INSTALL_INCLUDEDIR}/${PROJECT_NAME}/cxxmodules)
 
     # cmake-lint: disable=E1122
-    # (false positive: ARCHIVE and FILE_SET are separate install(TARGETS)
-    # artifact groups, each with its own DESTINATION, not a duplicate keyword)
+    # ARCHIVE and FILE_SET are separate artifact groups, not a duplicate DESTINATION.
     install(TARGETS ${PROJECT_NAME}
         EXPORT ${PROJECT_NAME}-targets
         ARCHIVE DESTINATION ${CMAKE_INSTALL_LIBDIR}

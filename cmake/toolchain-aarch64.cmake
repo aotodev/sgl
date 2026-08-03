@@ -38,7 +38,6 @@ set(CMAKE_FIND_ROOT_PATH_MODE_PACKAGE ONLY)
 # when qemu is present, so a build-only environment still configures.
 find_program(_sgl_qemu qemu-aarch64 NO_CACHE)
 if(_sgl_qemu)
-    # -cpu max: NEON is ARMv8-A baseline, but this keeps qemu from being the thing
-    # that limits which intrinsics the library may use.
+    # -cpu max: keeps qemu from capping which intrinsics the library may use.
     set(CMAKE_CROSSCOMPILING_EMULATOR ${_sgl_qemu};-cpu;max;-L;${_sgl_sysroot})
 endif()

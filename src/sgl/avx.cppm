@@ -113,7 +113,7 @@ inline box3d make_box_from_min_max(const __m128 lo, const __m128 hi, box_traits<
     return b;
 }
 
-/* Convenience wrapper — deduces box tag from type. */
+/* Convenience wrapper: deduces box tag from type. */
 template <typename Box> Box make_box(const __m128 lo, const __m128 hi) noexcept {
     return make_box_from_min_max(lo, hi, box_traits<Box>{});
 }
@@ -177,7 +177,7 @@ template <typename T> consteval std::int32_t dp_broadcast_mask() noexcept {
 }
 
 /* Newton-Raphson refined rsqrt: ~23-bit accuracy vs ~12 for _mm_rsqrt_ps alone.
- * x' = x * (3 - v * x²) * 0.5 */
+ * x' = x * (3 - v * x^2) * 0.5 */
 inline __m128 rsqrt_nr(const __m128 v) noexcept {
     const auto approx{_mm_rsqrt_ps(v)};
     const auto vxx{_mm_mul_ps(v, _mm_mul_ps(approx, approx))};
@@ -249,7 +249,7 @@ template <vector Vec> bool nearly_equal(const Vec& lhs, const Vec& rhs, const fl
     /* abs(a-b) */
     const __m128 sign_mask = _mm_set1_ps(-0.0f);
 
-    /* Exact equality (handles ±inf) */
+    /* Exact equality (handles +/-inf) */
     const __m128 exact = _mm_cmpeq_ps(a, b);
 
     /* absolute check */
@@ -283,7 +283,7 @@ template <vector Vec> bool any_nearly_zero(const Vec& val, const float tol = fp3
     const __m128 ok = _mm_cmplt_ps(abs_val, _mm_set1_ps(tol));
 
     constexpr auto mask{lane_mask<Vec>()};
-    return (_mm_movemask_ps(ok) & mask) != 0;
+    return static_cast<bool>(_mm_movemask_ps(ok) & mask);
 }
 
 /* unary - operator */
@@ -420,7 +420,7 @@ template <vector Vec> float length(const Vec& v) noexcept {
     return _mm_cvtss_f32(_mm_sqrt_ss(_mm_dp_ps(load(v), load(v), dp_scalar_mask<Vec>())));
 }
 
-/* Fast in-place normalize. _mm_rsqrt_ps gives ~12 bits (~3.5 decimal digits) — fine for directions, not for physics. */
+/* Fast in-place normalize. _mm_rsqrt_ps gives ~12 bits (~3.5 decimal digits): fine for directions, not for physics. */
 template <vector Vec> void normalize_fast(Vec& vec) noexcept {
     const __m128 v = load(vec);
     const __m128 inv_len = _mm_rsqrt_ps(_mm_dp_ps(v, v, dp_broadcast_mask<Vec>()));
@@ -585,7 +585,7 @@ template <vector Vec> bool is_parallel(const Vec& a, const Vec& b, float tol = f
     constexpr auto mask{dp_scalar_mask<Vec>()};
 
     /* Cauchy-Schwarz equality
-     * dot(a,b)^2 ≈ dot(a,a) · dot(b,b) */
+     * dot(a,b)^2 ~= dot(a,a) * dot(b,b) */
     const auto va = load(a);
     const auto vb = load(b);
 
@@ -608,7 +608,7 @@ template <vector Vec> bool all_less_than(const Vec& a, const Vec& b) noexcept {
 
 template <vector Vec> bool any_greater_than(const Vec& a, const Vec& b) noexcept {
     constexpr auto mask{lane_mask<Vec>()};
-    return (_mm_movemask_ps(_mm_cmpgt_ps(load(a), load(b))) & mask) != 0;
+    return static_cast<bool>(_mm_movemask_ps(_mm_cmpgt_ps(load(a), load(b))) & mask);
 }
 
 /* AABB containment: point inside box */
@@ -656,7 +656,7 @@ template <> inline bool is_parallel<vec3>(const vec3& a, const vec3& b, float to
     return nearly_zero(cross(a, b), tol);
 }
 
-/* vec2: {-y, x} — 90° counter-clockwise rotation */
+/* vec2: {-y, x}, a 90 degree counter-clockwise rotation */
 inline vec2 perpendicular(const vec2& v) noexcept {
     const __m128 shuffled = _mm_shuffle_ps(load(v), load(v), _MM_SHUFFLE(3, 2, 0, 1));
     /* Negate lane 0 only: XOR sign bit */
@@ -693,14 +693,14 @@ template <vector Vec> float angle_between(const Vec& a, const Vec& b) noexcept {
     const auto va = load(a);
     const auto vb = load(b);
 
-    /* cos(θ) = dot(a,b) / sqrt(dot(a,a) · dot(b,b)) */
+    /* cos(theta) = dot(a,b) / sqrt(dot(a,a) * dot(b,b)) */
     const auto ab = _mm_dp_ps(va, vb, dp_scalar_mask<Vec>());
     const auto aa = _mm_dp_ps(va, va, dp_scalar_mask<Vec>());
     const auto bb = _mm_dp_ps(vb, vb, dp_scalar_mask<Vec>());
 
     const auto cos_theta = _mm_div_ss(ab, _mm_sqrt_ss(_mm_mul_ss(aa, bb)));
 
-    /* clamp to [-1,1] — guards against fp overshoot before acos */
+    /* clamp to [-1,1], guarding against fp overshoot before acos */
     const auto ct{_mm_cvtss_f32(_mm_min_ss(_mm_max_ss(cos_theta, _mm_set_ss(-1.0f)), _mm_set_ss(1.0f)))};
 
     return std::acos(ct);
@@ -781,7 +781,7 @@ template <box_type Box> bool overlaps(const Box& a, const Box& b) noexcept {
     constexpr auto mask{box_traits<Box>::lane_mask};
     const auto sep{_mm_movemask_ps(_mm_cmpgt_ps(a_lo, b_hi)) | _mm_movemask_ps(_mm_cmpgt_ps(b_lo, a_hi))};
 
-    return (sep & mask) == 0;
+    return !(sep & mask);
 }
 
 template <box_type Box> bool contains(const Box& outer, const Box& inner) noexcept {
@@ -854,7 +854,7 @@ inline box2d box2d_from_center_half(const vec2& c, const vec2& half_ext) noexcep
     const __m128 hv{load(half_ext)};
     const __m128 cc{_mm_movelh_ps(cv, cv)};
     const __m128 hh{_mm_movelh_ps(hv, hv)};
-    /* layout: {min.x, min.y, max.x, max.y} = center ∓ half_ext, packed into one 128-bit store */
+    /* layout: {min.x, min.y, max.x, max.y} = center -/+ half_ext, packed into one 128-bit store */
     const __m128 signed_h{_mm_xor_ps(hh, _mm_setr_ps(-0.0f, -0.0f, 0.0f, 0.0f))};
     box2d b{};
     _mm_store_ps(&b.min.x, _mm_add_ps(cc, signed_h));
@@ -936,7 +936,7 @@ inline float surface_area(const box3d& b) noexcept {
     const __m128 d = _mm_sub_ps(hi, lo);
 
     /* SA = 2(wh + wd + hd)
-     * we need {w, w, h} · {h, d, d} */
+     * we need dot({w, w, h}, {h, d, d}) */
 
     /* {w, w, h, ?} */
     const __m128 lhs = _mm_shuffle_ps(d, d, _MM_SHUFFLE(3, 1, 0, 0));
@@ -993,7 +993,7 @@ inline mat4 operator*(const mat4& a, const mat4& b) noexcept {
 }
 
 /* ============================================================
- * mat4 × vector transforms
+ * mat4 * vector transforms
  * ============================================================ */
 
 /** Transform a vec4 by a mat4: M * v. */
@@ -1109,7 +1109,7 @@ inline mat4 inverse(const mat4& m) noexcept {
 /**
  * Inverse of a rigid transform (rotation + translation only, no scale).
  *
- * For M = [R | t; 0 | 1], M⁻¹ = [Rᵀ | -Rᵀt; 0 | 1].
+ * For M = [R | t; 0 | 1], M^-1 = [R^T | -R^T t; 0 | 1].
  * Cheaper than the full inverse since we can exploit orthogonality.
  *
  * Input column layout: c0={r00,r10,r20,0}, c1={r01,r11,r21,0},
@@ -1121,7 +1121,7 @@ inline mat4 inverse_rigid(const mat4& m) noexcept {
     const __m128 c2{_mm_load_ps(&m.cols[2].x)};
     const __m128 c3{_mm_load_ps(&m.cols[3].x)};
 
-    /* Transpose the 3×3 rotation block.
+    /* Transpose the 3x3 rotation block.
      * r0 = {r00, r01, r02, 0}, r1 = {r10, r11, r12, 0}, r2 = {r20, r21, r22, 0} */
     const __m128 lo01{_mm_unpacklo_ps(c0, c1)};               /* {r00, r01, r10, r11} */
     const __m128 lo2x{_mm_unpacklo_ps(c2, _mm_setzero_ps())}; /* {r02, 0, r12, 0} */
@@ -1131,14 +1131,14 @@ inline mat4 inverse_rigid(const mat4& m) noexcept {
     const __m128 r1{_mm_movehl_ps(lo2x, lo01)};                                  /* {r10, r11, r12, 0} */
     const __m128 r2{_mm_movelh_ps(hi01, _mm_unpackhi_ps(c2, _mm_setzero_ps()))}; /* {r20, r21, r22, 0} */
 
-    /* Compute -Rᵀ * t so the new translation column becomes {-r0·t, -r1·t, -r2·t, 1}. */
+    /* Compute -R^T * t so the new translation column becomes {-dot(r0,t), -dot(r1,t), -dot(r2,t), 1}. */
     const __m128 neg_t{_mm_xor_ps(c3, _mm_set1_ps(-0.0f))};
 
-    const __m128 d0{_mm_dp_ps(r0, neg_t, 0x71)}; /* {-(r0·t), 0, 0, 0} */
-    const __m128 d1{_mm_dp_ps(r1, neg_t, 0x72)}; /* {0, -(r1·t), 0, 0} */
-    const __m128 d2{_mm_dp_ps(r2, neg_t, 0x74)}; /* {0, 0, -(r2·t), 0} */
+    const __m128 d0{_mm_dp_ps(r0, neg_t, 0x71)}; /* {-dot(r0,t), 0, 0, 0} */
+    const __m128 d1{_mm_dp_ps(r1, neg_t, 0x72)}; /* {0, -dot(r1,t), 0, 0} */
+    const __m128 d2{_mm_dp_ps(r2, neg_t, 0x74)}; /* {0, 0, -dot(r2,t), 0} */
 
-    /* Combine: {-r0·t, -r1·t, -r2·t, 1} */
+    /* Combine: {-dot(r0,t), -dot(r1,t), -dot(r2,t), 1} */
     const __m128 new_t = _mm_blend_ps(_mm_or_ps(_mm_or_ps(d0, d1), d2), _mm_set1_ps(1.0f), 0b1000);
 
     return store_cols(r0, r1, r2, new_t);
@@ -1147,10 +1147,10 @@ inline mat4 inverse_rigid(const mat4& m) noexcept {
 /**
  * Inverse of an affine transform with uniform scale and no shear: M = sR + t.
  *
- *    M⁻¹ = [ (1/s)Rᵀ  | -(1/s)Rᵀt ]
- *          [    0     |      1    ]
+ *    M^-1 = [ (1/s)R^T | -(1/s)R^T t ]
+ *           [    0     |      1      ]
  *
- * s² = dot(col0, col0). Divide the transposed rotation by s² to get (1/s)Rᵀ.
+ * s^2 = dot(col0, col0). Divide the transposed rotation by s^2 to get (1/s)R^T.
  */
 inline mat4 inverse_affine_uniform(const mat4& m) noexcept {
     const __m128 c0{_mm_load_ps(&m.cols[0].x)};
@@ -1158,10 +1158,10 @@ inline mat4 inverse_affine_uniform(const mat4& m) noexcept {
     const __m128 c2{_mm_load_ps(&m.cols[2].x)};
     const __m128 c3{_mm_load_ps(&m.cols[3].x)};
 
-    const __m128 s2{_mm_dp_ps(c0, c0, 0x7F)}; /* broadcast s² */
+    const __m128 s2{_mm_dp_ps(c0, c0, 0x7F)}; /* broadcast s^2 */
     const __m128 inv_s2{_mm_div_ps(_mm_set1_ps(1.0f), s2)};
 
-    /* Transpose 3×3 rotation block and scale by 1/s² */
+    /* Transpose 3x3 rotation block and scale by 1/s^2 */
     const __m128 lo01{_mm_unpacklo_ps(c0, c1)};
     const __m128 lo2x{_mm_unpacklo_ps(c2, _mm_setzero_ps())};
     const __m128 hi01{_mm_unpackhi_ps(c0, c1)};
@@ -1170,7 +1170,7 @@ inline mat4 inverse_affine_uniform(const mat4& m) noexcept {
     auto r1{_mm_mul_ps(_mm_movehl_ps(lo2x, lo01), inv_s2)};
     auto r2{_mm_mul_ps(_mm_movelh_ps(hi01, _mm_unpackhi_ps(c2, _mm_setzero_ps())), inv_s2)};
 
-    /* -Rᵀ/s² · t */
+    /* -R^T/s^2 * t */
     const __m128 neg_t{_mm_xor_ps(c3, _mm_set1_ps(-0.0f))};
     const __m128 d0{_mm_dp_ps(r0, neg_t, 0x71)};
     const __m128 d1{_mm_dp_ps(r1, neg_t, 0x72)};
@@ -1213,9 +1213,9 @@ inline mat2 negate(const mat2& m) noexcept {
     return r;
 }
 
-/* mat2 × mat2
+/* mat2 * mat2
  * | a  b |   | e  f |   | ae+bg  af+bh |
- * | c  d | × | g  h | = | ce+dg  cf+dh |
+ * | c  d | * | g  h | = | ce+dg  cf+dh |
  *
  * Memory layout: lhs = {a, c, b, d}, rhs = {e, g, f, h}
  */
@@ -1234,7 +1234,7 @@ inline mat2 operator*(const mat2& lhs, const mat2& rhs) noexcept {
     return result;
 }
 
-/* mat2 × vec2: result = {a,c}*x + {b,d}*y */
+/* mat2 * vec2: result = {a,c}*x + {b,d}*y */
 inline vec2 transform_vec2(const mat2& m, const vec2& v) noexcept {
     const __m128 mv{load(m)}; /* {a, c, b, d} */
     const __m128 vv{load(v)}; /* {x, y, 0, 0} */
@@ -1249,7 +1249,7 @@ inline vec2 transform_vec2(const mat2& m, const vec2& v) noexcept {
     return out;
 }
 
-/* Transpose mat2: {a, c, b, d} → {a, b, c, d}. */
+/* Transpose mat2: {a, c, b, d} -> {a, b, c, d}. */
 inline mat2 transpose(const mat2& m) noexcept {
     mat2 r{};
     _mm_store_ps(&r.cols[0].x, _mm_shuffle_ps(load(m), load(m), _MM_SHUFFLE(3, 1, 2, 0)));
@@ -1259,7 +1259,7 @@ inline mat2 transpose(const mat2& m) noexcept {
 /* det(mat2) = ad - bc. Memory: {a, c, b, d}. */
 inline float determinant(const mat2& m) noexcept {
     const __m128 v{load(m)};
-    /* {a, c, b, d} * {d, b, c, a} → {ad, cb, bc, da}; lane0 - lane2 = ad - bc */
+    /* {a, c, b, d} * {d, b, c, a} -> {ad, cb, bc, da}; lane0 - lane2 = ad - bc */
     const __m128 swz{_mm_shuffle_ps(v, v, _MM_SHUFFLE(0, 1, 2, 3))};
     const __m128 prod{_mm_mul_ps(v, swz)};
     return _mm_cvtss_f32(_mm_sub_ss(prod, _mm_movehl_ps(prod, prod)));
@@ -1298,7 +1298,7 @@ inline float trace(const mat2& m) noexcept {
 
 inline mat3 to_mat3(const mat4& m) noexcept {
     mat3 r{};
-    /* vec3 store writes to the pad lane — that's fine, it's unused */
+    /* vec3 store writes to the pad lane, which is fine: it is unused */
     _mm_store_ps(&r.cols[0].x, _mm_load_ps(&m.cols[0].x));
     _mm_store_ps(&r.cols[1].x, _mm_load_ps(&m.cols[1].x));
     _mm_store_ps(&r.cols[2].x, _mm_load_ps(&m.cols[2].x));
@@ -1339,9 +1339,9 @@ inline mat4 set_translation(const mat4& m, const vec3& t) noexcept {
 
 /**
  * Construct a unit quaternion that rotates by `angle` (radians) around `axis`.
- * The axis need not be unit length — it is normalized internally. Identity is returned for a zero axis.
+ * The axis need not be unit length: it is normalized internally. Identity is returned for a zero axis.
  *
- *   q = (sin(θ/2) * normalize(axis), cos(θ/2))
+ *   q = (sin(angle/2) * normalize(axis), cos(angle/2))
  */
 inline quat quat_from_axis_angle(const vec3& axis, const float angle) noexcept {
     const auto half{angle * 0.5f};
@@ -1383,7 +1383,7 @@ inline quat normalized(const quat& q) noexcept {
     return store_quat(_mm_div_ps(v, len));
 }
 
-/* For unit quaternions inverse == conjugate; for general quaternions: conjugate / norm². */
+/* For unit quaternions the inverse is the conjugate; for general quaternions: conjugate / norm^2. */
 inline quat inverse(const quat& q) noexcept {
     const __m128 v = load(q);
     const __m128 sign = _mm_setr_ps(-0.0f, -0.0f, -0.0f, 0.0f);
@@ -1420,7 +1420,7 @@ inline quat operator*(const quat& q1, const quat& q2) noexcept {
     const __m128 a_wwww = _mm_shuffle_ps(a, a, _MM_SHUFFLE(3, 3, 3, 3));
 
     /* each row: q1.component * (shuffled q2 with sign flips)
-     * r = w1 * { x2,  y2,  z2,  w2}    →  a_wwww * b
+     * r = w1 * { x2,  y2,  z2,  w2}    ->  a_wwww * b
      *   + x1 * { w2, -z2,  y2, -x2}
      *   + y1 * { z2,  w2, -x2, -y2}
      *   + z1 * {-y2,  x2,  w2, -z2}
@@ -1445,7 +1445,7 @@ inline quat operator*(const quat& q1, const quat& q2) noexcept {
 /**
  * Rotate a vector by a unit quaternion.
  *
- * Full sandwich product q * v * q⁻¹ would require two quat multiplies.
+ * Full sandwich product q * v * q^-1 would require two quat multiplies.
  * Equivalent but cheaper form (Rodrigues):
  *   t  = 2 * cross(q.xyz, v)
  *   v' = v + q.w * t + cross(q.xyz, t)
@@ -1543,7 +1543,7 @@ inline float angle_between(const quat& a, const quat& b) noexcept {
 inline bool is_axis_aligned(const vec3& direction, const float tolerance = fp32_rel_tol) noexcept {
     const auto snapped{snap_to_axis(direction)};
     const auto dir_norm{normalized(direction)};
-    /* |dot(normalized, snapped)| ≈ 1 if axis-aligned */
+    /* |dot(normalized, snapped)| ~= 1 if axis-aligned */
     const auto d{std::abs(_mm_cvtss_f32(_mm_dp_ps(load(dir_norm), load(snapped), dp_scalar_mask<vec3>())))};
     return d >= (1.0f - tolerance);
 }
@@ -1738,9 +1738,7 @@ inline vec3 unproject_to_3d(const vec2& point2d, const plane_basis& basis) noexc
     return out;
 }
 
-/* Batch project: convert an array of 3D points to 2D.
- * This is the hot path for wall carving — worth optimizing.
- */
+/* Batch project: convert an array of 3D points to 2D. Hot path. */
 inline void project_to_2d_batch(const vec3* points_3d, vec2* points_2d, const std::int32_t count, const plane_basis& basis) noexcept {
     const __m128 origin = _mm_load_ps(&basis.origin.x);
     const __m128 u = _mm_load_ps(&basis.u.x);
@@ -1789,7 +1787,7 @@ inline segment_intersection_2d intersect_segments_2d(const vec2& a0, const vec2&
 
     const float denom = cross(da, db);
 
-    /* Parallel or degenerate — no single intersection point */
+    /* Parallel or degenerate: no single intersection point */
     if (std::abs(denom) < epsilon) {
         return {};
     }
@@ -1810,12 +1808,12 @@ inline segment_intersection_2d intersect_segments_2d(const vec2& a0, const vec2&
 
 /* Ray-AABB intersection using the slab method (2D).
  *
- * Ray: origin + t * direction, t ∈ [0, ∞)
+ * Ray: origin + t * direction, t in [0, inf)
  * Computes t_entry and t_exit for all slab pairs simultaneously.
  *
  * Uses reciprocal direction to turn division into multiplication.
  * Handles infinities correctly when direction component is 0
- * (IEEE 754: 1/0 = ±inf, then min/max propagate correctly).
+ * (IEEE 754: 1/0 = +/-inf, then min/max propagate correctly).
  */
 inline ray_box_hit intersect_ray_box(const vec2& origin, const vec2& direction, const box2d& box) noexcept {
     /* For vec2 we only care about lanes 0 and 1.
@@ -1884,7 +1882,7 @@ template <typename Vec, typename Box>
 bool segment_intersects_box(const Vec& a, const Vec& b, const Box& box) noexcept {
     const Vec direction = b - a;
     const ray_box_hit hit = intersect_ray_box(a, direction, box);
-    /* Ray hit is parameterized by segment length, so t ∈ [0, 1] means within segment */
+    /* Ray hit is parameterized by segment length, so t in [0, 1] means within segment */
     return hit.hit && hit.t_entry <= 1.0f && hit.t_exit >= 0.0f;
 }
 
@@ -1908,7 +1906,7 @@ inline int winding_number(const vec2& point, const vec2* vertices, const std::in
 
         if (v0.y <= point.y) {
             if (v1.y > point.y) {
-                /* Upward crossing — check if point is left of edge */
+                /* Upward crossing: check if point is left of edge */
                 const float side = cross(v1 - v0, point - v0);
                 if (side > 0.0f) {
                     ++winding;
@@ -1916,7 +1914,7 @@ inline int winding_number(const vec2& point, const vec2* vertices, const std::in
             }
         } else {
             if (v1.y <= point.y) {
-                /* Downward crossing — check if point is right of edge */
+                /* Downward crossing: check if point is right of edge */
                 const float side = cross(v1 - v0, point - v0);
                 if (side < 0.0f) {
                     --winding;
@@ -1929,7 +1927,7 @@ inline int winding_number(const vec2& point, const vec2* vertices, const std::in
 }
 
 inline bool point_in_polygon(const vec2& point, const vec2* vertices, const std::int32_t count) noexcept {
-    return winding_number(point, vertices, count) != 0;
+    return static_cast<bool>(winding_number(point, vertices, count));
 }
 
 inline segment_polygon_hit intersect_segment_polygon(const vec2& a, const vec2& b, const vec2* vertices, const std::int32_t count) noexcept {
@@ -1955,7 +1953,7 @@ inline ivec2 grid_cell(const vec2& point, const vec2& grid_origin, const float c
     const __m128 inv_size = _mm_set1_ps(1.0f / cell_size);
     const __m128 cell_f = _mm_floor_ps(_mm_mul_ps(p, inv_size));
 
-    /* Convert to int — _mm_cvttps_epi32 truncates, but we already floored */
+    /* Convert to int. _mm_cvttps_epi32 truncates, but we already floored */
     const __m128i cell_i = _mm_cvtps_epi32(cell_f); /* rounds to nearest, but value is already integer after floor */
 
     alignas(16) int cells[4]{};

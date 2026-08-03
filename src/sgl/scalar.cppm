@@ -36,7 +36,7 @@ export namespace sgl {
 
 constexpr float fp32_abs_tol{1e-6f};
 
-/* ~1.52e-5 — allows ~7 bits of accumulated rounding error */
+/* ~1.52e-5, allows ~7 bits of accumulated rounding error */
 constexpr float fp32_rel_tol{128.0f * std::numeric_limits<float>::epsilon()};
 
 /* ============================================================
@@ -45,7 +45,7 @@ constexpr float fp32_rel_tol{128.0f * std::numeric_limits<float>::epsilon()};
 
 /**
  * Returns true when lhs and rhs agree within an absolute or relative tolerance.
- * Bitwise equality is checked first to handle ±inf and ±0 correctly.
+ * Bitwise equality is checked first to handle +/-inf and +/-0 correctly.
  */
 inline SGL_CMATH_CONSTEXPR bool nearly_equal(
     const float lhs, const float rhs, const float abs_tol = fp32_abs_tol, const float rel_tol = fp32_rel_tol) noexcept {

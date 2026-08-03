@@ -99,7 +99,7 @@ export struct alignas(16) vec4 {
  * ============================================================ */
 
 /**
- * @brief Column-major 2×2 matrix.
+ * @brief Column-major 2x2 matrix.
  *
  * Layout: @c cols[0] = first column = {a, c}, @c cols[1] = {b, d}.
  * @code
@@ -112,7 +112,7 @@ export struct alignas(16) mat2 {
 };
 
 /**
- * @brief Column-major 3×3 matrix.
+ * @brief Column-major 3x3 matrix.
  *
  * Each column is a @c vec3 with an implicit pad lane to allow aligned
  * 128-bit SIMD loads. The pad lane of each column is always zero.
@@ -122,7 +122,7 @@ export struct alignas(16) mat3 {
 };
 
 /**
- * @brief Column-major 4×4 matrix (64-byte aligned for cache-line friendliness).
+ * @brief Column-major 4x4 matrix (64-byte aligned for cache-line friendliness).
  *
  * Standard column-major layout: @c cols[j][i] = element at row @c i, column @c j.
  */
@@ -242,7 +242,7 @@ export struct segment_polygon_hit {
  *
  * @c point_a lies on the first segment, @c point_b on the second; @c s and @c t
  * are their respective parametric positions in [0, 1]. @c distance_squared is the
- * squared gap (zero when the segments touch or cross) — compare it against a
+ * squared gap (zero when the segments touch or cross). Compare it against a
  * squared radius for capsule/clearance tests without taking a square root.
  */
 export struct segment_closest_result {
@@ -269,14 +269,16 @@ export struct grid_cell_range_3d {
     ivec3 max{}; /**< @brief Last cell (inclusive). */
 };
 
+/** @brief Line segment in 2D. */
 export struct segment_2d {
-    vec2 start;
-    vec2 end;
+    vec2 start; ///< @brief First endpoint.
+    vec2 end;   ///< @brief Second endpoint.
 };
 
+/** @brief Line segment in 3D. */
 export struct segment_3d {
-    vec3 start;
-    vec3 end;
+    vec3 start; ///< @brief First endpoint.
+    vec3 end;   ///< @brief Second endpoint.
 };
 
 /* ============================================================
@@ -296,20 +298,14 @@ export struct box3d_pair {
 };
 
 /**
- * @brief Represents a rigid transform with uniform scale: T(p) = R(s * p) + t
+ * @brief Rigid transform with uniform scale: T(p) = R(s * p) + t
  *
- * Storage format matching Unreal's FTransform layout conceptually.
- * For actual computation (transforming points), convert to mat4.
- *
- * Memory layout: 3 * 16 bytes = 48 bytes
- *   - position: vec3 (16 bytes, padded)
- *   - rotation: quat (16 bytes)
- *   - scale:    vec3 (16 bytes, padded)
+ * Storage only, 48 bytes across three 16-byte members. Convert to @c mat4 to transform points.
  */
 export struct alignas(16) transform {
-    vec3 position{};
-    quat rotation{0.0f, 0.0f, 0.0f, 1.0f}; /* identity */
-    vec3 scale{1.0f, 1.0f, 1.0f};
+    vec3 position{};                       ///< @brief Translation.
+    quat rotation{0.0f, 0.0f, 0.0f, 1.0f}; ///< @brief Rotation, identity by default.
+    vec3 scale{1.0f, 1.0f, 1.0f};          ///< @brief Scale; the transform math assumes it is uniform.
 };
 
 /* ============================================================
@@ -326,7 +322,7 @@ concept box_type = one_of_decayed<Box, box2d, box3d>;
 template <typename Vec>
 concept vector = one_of_decayed<Vec, vec2, vec3, vec4>;
 
-/** @brief Matches @c vec2 or @c vec3 — vectors with a well-defined Euclidean geometry (excludes projective @c vec4). */
+/** @brief Matches @c vec2 or @c vec3: vectors with a well-defined Euclidean geometry (excludes projective @c vec4). */
 template <typename Vec>
 concept spatial_vector = one_of_decayed<Vec, vec2, vec3>;
 
@@ -334,16 +330,16 @@ concept spatial_vector = one_of_decayed<Vec, vec2, vec3>;
  * Useful constants
  * ============================================================ */
 
-/** @brief Identity quaternion — represents no rotation. */
+/** @brief Identity quaternion: represents no rotation. */
 export constexpr quat quat_identity{0.0f, 0.0f, 0.0f, 1.0f};
 
-/** @brief 2×2 identity matrix. */
+/** @brief 2x2 identity matrix. */
 export constexpr mat2 mat2_identity{.cols = {vec2{1.0f, 0.0f}, vec2{0.0f, 1.0f}}};
 
-/** @brief 3×3 identity matrix. */
+/** @brief 3x3 identity matrix. */
 export constexpr mat3 mat3_identity{.cols = {vec3{1.0f, 0.0f, 0.0f}, vec3{0.0f, 1.0f, 0.0f}, vec3{0.0f, 0.0f, 1.0f}}};
 
-/** @brief 4×4 identity matrix. */
+/** @brief 4x4 identity matrix. */
 export constexpr mat4 mat4_identity{
     .cols = {vec4{1.0f, 0.0f, 0.0f, 0.0f}, vec4{0.0f, 1.0f, 0.0f, 0.0f}, vec4{0.0f, 0.0f, 1.0f, 0.0f}, vec4{0.0f, 0.0f, 0.0f, 1.0f}}};
 

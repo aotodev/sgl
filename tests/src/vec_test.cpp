@@ -345,10 +345,10 @@ TEST(Vec3, Perpendicular) {
 
 TEST(Vec3, AngleBetween) {
     auto a = sgl::angle_between(sgl::vec3{1, 0, 0}, sgl::vec3{0, 1, 0});
-    EXPECT_NEAR(a, std::acos(0.0f), 1e-5f); /* π/2 */
+    EXPECT_NEAR(a, std::acos(0.0f), 1e-5f); /* pi/2 */
 }
 
 TEST(Vec2, AngleBetween) {
     auto a = sgl::angle_between(sgl::vec2{1, 0}, sgl::vec2{-1, 0});
-    EXPECT_NEAR(a, std::acos(-1.0f), 1e-5f); /* π */
+    EXPECT_NEAR(a, std::acos(-1.0f), 1e-5f); /* pi */
 }

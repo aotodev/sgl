@@ -40,9 +40,9 @@ int main() {
 The intrinsic-level implementation is selected automatically at configure time
 based on the target architecture, behind one uniform API:
 
-| Architecture        | Backend                          |
-| ------------------- | -------------------------------- |
-| x86-64              | SSE / AVX2 + FMA             |
+| Architecture                        | Backend                |
+| ----------------------------------- | ---------------------- |
+| x86-64                              | SSE / AVX2 + FMA       |
 | AArch64 (Apple Silicon, ARMv8.2-A+) | NEON (D-form + Q-form) |
 
 Both backends expose the exact same `sgl::` names, so code written against one
@@ -69,9 +69,9 @@ compiles unchanged against the other.
   construction and signed-distance/projection queries, 3D<->2D plane-basis
   projection (with batch variants), and full TRS transform composition,
   inversion, and point/direction application.
-- **Intersection & spatial queries**: 2D segment intersection, ray– and
-  segment–AABB tests, closest distance between two 3D segments (for
-  capsule/clearance checks), point-in-polygon (winding number), segment–polygon,
+- **Intersection & spatial queries**: 2D segment intersection, ray-AABB and
+  segment-AABB tests, closest distance between two 3D segments (for
+  capsule/clearance checks), point-in-polygon (winding number), segment-polygon,
   and integer grid-cell mapping.
 
 ## Design notes
@@ -82,8 +82,8 @@ compiles unchanged against the other.
   Templates carry the weight that boilerplate usually does, which is why the
   surface above fits in a compact codebase.
 - **Closed-form transform inverses.** Rigid (`R | t`) and uniform-scale affine
-  transforms are inverted by exploiting their orthogonality — transpose the
-  rotation, remap the translation — rather than running the general
+  transforms are inverted by exploiting their orthogonality (transpose the
+  rotation, remap the translation) rather than running the general
   cofactor/determinant inverse. For those transform classes that is the same
   result for a fraction of the arithmetic; the general `inverse` remains available
   when the matrix is arbitrary.
@@ -103,7 +103,7 @@ cmake -B build -G Ninja
 cmake --build build
 ```
 
-> Use the **Ninja** or **Visual Studio** generator.  CMake's C++20 module support
+> Use the **Ninja** or **Visual Studio** generator. CMake's C++20 module support
 > does not work with the Makefiles generators.
 
 ### Toolchains

@@ -1,27 +1,6 @@
 ---
-# clang-tidy configuration for sgl.
-#
-# Curated for a C++20 low-level module-based simd geometry library.
-#
-# Notable disables (rationale):
-#   bugprone-easily-swappable-parameters        too pedantic for low-level APIs
-#   cppcoreguidelines-owning-memory             library manages raw memory by design
-#   cppcoreguidelines-avoid-do-while            false positives on macro patterns
-#   cppcoreguidelines-pro-type-union-access     not used, but overly strict
-#   cppcoreguidelines-pro-type-vararg           va_args not used, but blocks gtest macros
-#   cppcoreguidelines-avoid-c-arrays            raw arrays used intentionally in low-level code
-#   modernize-use-trailing-return-type          matter of style, not safer
-#   modernize-use-nodiscard                     applied manually where meaningful
-#   modernize-use-designated-initializers       not always clearer for small aggregates
-#   modernize-avoid-c-arrays                    alias of cppcoreguidelines-avoid-c-arrays
-#   performance-no-int-to-ptr                   intentional in vector pointer arithmetic
-#   performance-enum-size                       overly pedantic for this codebase
-#   readability-magic-numbers                   noisy on alignments, bit widths, sizes
-#   readability-identifier-length               too pedantic (i, n, p are fine)
-#   readability-function-cognitive-complexity   not actionable as a single metric
-#   misc-include-cleaner                        too aggressive with C++20 modules
-#   misc-no-recursion                           recursion is fine where used
-#   cert-err33-c                                excessive — flags every unchecked stdlib call
+# clang-tidy configuration for sgl. readability-* is listed check-by-check on purpose:
+# readability-implicit-bool-conversion would demand the `!= 0` spellings.
 
 Checks: "-*,
 bugprone-*,
