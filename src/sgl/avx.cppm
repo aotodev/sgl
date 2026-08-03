@@ -20,13 +20,19 @@ import :scalar;
 
 export namespace sgl {
 
-/* Load vec2 into lower 2 lanes of __m128, upper lanes zeroed. */
+/* Load vec2 into lower 2 lanes of __m128, upper lanes zeroed.
+ *
+ * Goes through __m128i rather than double: the vector types carry __may_alias__, so
+ * reading a pair of floats through one is well defined, whereas a double lvalue is a
+ * strict-aliasing violation. GCC at -O2 acted on that, treating initialized vec2
+ * arrays as never written (visible as a bogus -Wuninitialized and as wrong results
+ * from the polygon queries). Both still compile to a single movq. */
 inline __m128 load(const vec2& v) noexcept {
-    return _mm_castpd_ps(_mm_load_sd(reinterpret_cast<const double*>(&v.x)));
+    return _mm_castsi128_ps(_mm_loadl_epi64(reinterpret_cast<const __m128i*>(&v.x)));
 }
 
 inline void store(const __m128 vals, vec2& dst) noexcept {
-    _mm_store_sd(reinterpret_cast<double*>(&dst.x), _mm_castps_pd(vals));
+    _mm_storel_epi64(reinterpret_cast<__m128i*>(&dst.x), _mm_castps_si128(vals));
 }
 
 inline __m128 load(const vec3& v) noexcept {
