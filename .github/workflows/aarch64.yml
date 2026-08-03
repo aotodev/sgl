@@ -1,0 +1,38 @@
+# AArch64 cross build + tests (the NEON path), run under qemu-user.
+#
+# The toolchain file sets CMAKE_CROSSCOMPILING_EMULATOR, so gtest_discover_tests and
+# ctest invoke the cross-built binaries through qemu with no extra plumbing here.
+name: aarch64
+
+on:
+  push:
+    branches: [master]
+    paths:
+      - 'src/**'
+      - 'tests/**'
+      - 'cmake/**'
+      - '**/CMakeLists.txt'
+      - '.github/workflows/aarch64.yml'
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: "${{ github.workflow }}-${{ github.ref }}"
+  cancel-in-progress: true
+
+jobs:
+  build-test:
+    runs-on: ubuntu-latest
+    container:
+      image: ghcr.io/aotodev/sgl-ci:latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Configure, build and test
+        run: |
+          cmake -G Ninja -B build \
+            -DCMAKE_TOOLCHAIN_FILE=cmake/toolchain-aarch64.cmake \
+            -DCMAKE_BUILD_TYPE=Release -DSGL_TESTS=ON
+          cmake --build build -j
+          ctest --test-dir build --output-on-failure
