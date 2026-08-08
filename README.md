@@ -81,6 +81,21 @@ compiles unchanged against the other.
   names; the SIMD layer is an implementation detail, not part of the surface.
   Templates carry the weight that boilerplate usually does, which is why the
   surface above fits in a compact codebase.
+- **Storage types are trivially default constructible.** `vec2`, `vec3`, `vec4`,
+  `ivec2`, `ivec3`, `mat2`, `mat3`, `mat4`, `box2d` and `box3d` carry no default
+  member initialisers, so `sgl::vec3 v;` leaves its members with no value while
+  `sgl::vec3 v{};` zeroes them, exactly as `float` behaves. That is deliberate:
+  triviality is what lets a container hold `N` of them without constructing
+  anything, keeps them usable inside a container during constant evaluation, and
+  makes a raw byte copy legitimate. An initialiser as small as `float x{}` would
+  make the default constructor non-trivial and take all three away, and so would a
+  user-provided constructor that merely assigns zero, since triviality is about
+  whether a constructor must run at all rather than about what it does. Types whose
+  default carries meaning keep their initialisers and stay non-trivial: `quat`
+  (identity rotation), `transform` (identity plus unit scale), and the result
+  structs returned by queries. Note the consequence: reading an uninitialised value
+  is undefined behaviour under C++20 and erroneous behaviour under C++26, so write
+  the braces whenever you are not about to assign.
 - **Closed-form transform inverses.** Rigid (`R | t`) and uniform-scale affine
   transforms are inverted by exploiting their orthogonality (transpose the
   rotation, remap the translation) rather than running the general

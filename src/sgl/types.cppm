@@ -18,17 +18,20 @@ namespace sgl {
  * Integer vectors
  * ============================================================ */
 
+/* The storage types below have no member initialisers, so they are trivially default
+ * constructible: `vec3 v{}` zeroes, `vec3 v;` does not. See the README. */
+
 /** @brief 2-component 32-bit integer vector. */
 export struct ivec2 {
-    std::int32_t x{}; ///< @brief x component.
-    std::int32_t y{}; ///< @brief y component.
+    std::int32_t x; ///< @brief x component.
+    std::int32_t y; ///< @brief y component.
 };
 
 /** @brief 3-component 32-bit integer vector. */
 export struct ivec3 {
-    std::int32_t x{}; ///< @brief x component.
-    std::int32_t y{}; ///< @brief y component.
-    std::int32_t z{}; ///< @brief z component.
+    std::int32_t x; ///< @brief x component.
+    std::int32_t y; ///< @brief y component.
+    std::int32_t z; ///< @brief z component.
 };
 
 /* ============================================================
@@ -37,8 +40,8 @@ export struct ivec3 {
 
 /** @brief 2-component single-precision float vector (8-byte aligned). */
 export struct alignas(8) vec2 {
-    float x{}; ///< @brief x component.
-    float y{}; ///< @brief y component.
+    float x; ///< @brief x component.
+    float y; ///< @brief y component.
 
     constexpr float operator[](std::size_t i) const noexcept {
         assert(i < 2);
@@ -54,16 +57,16 @@ export struct alignas(8) vec2 {
 /**
  * @brief 3-component single-precision float vector (16-byte aligned).
  *
- * Contains an explicit @c pad lane so the struct occupies a full 16-byte
- * SSE register. SIMD stores may write to @c pad; callers must treat it
- * as reserved and always zero.
+ * The 16-byte alignment sizes the struct to a full SSE register, so a 128-bit load or
+ * store covers it. The fourth lane is implicit padding rather than a named member: naming
+ * it would make every `vec3{x, y, z}` trip `-Wmissing-field-initializers`, and giving it an
+ * initialiser would cost the type its trivial default constructor. Nothing reads that lane;
+ * every reduction masks it out.
  */
 export struct alignas(16) vec3 {
-    float x{}; ///< @brief x component.
-    float y{}; ///< @brief y component.
-    float z{}; ///< @brief z component.
-
-    [[maybe_unused]] float pad{}; /**< @brief Reserved. Written by 128-bit SIMD stores, must stay zero. */
+    float x; ///< @brief x component.
+    float y; ///< @brief y component.
+    float z; ///< @brief z component.
 
     constexpr float operator[](std::size_t i) const noexcept {
         assert(i < 3);
@@ -78,10 +81,10 @@ export struct alignas(16) vec3 {
 
 /** @brief 4-component single-precision float vector (16-byte aligned). */
 export struct alignas(16) vec4 {
-    float x{}; ///< @brief x component.
-    float y{}; ///< @brief y component.
-    float z{}; ///< @brief z component.
-    float w{}; ///< @brief w component.
+    float x; ///< @brief x component.
+    float y; ///< @brief y component.
+    float z; ///< @brief z component.
+    float w; ///< @brief w component.
 
     constexpr float operator[](std::size_t i) const noexcept {
         assert(i < 4);
@@ -108,17 +111,17 @@ export struct alignas(16) vec4 {
  * @endcode
  */
 export struct alignas(16) mat2 {
-    vec2 cols[2]{}; /**< @brief Column vectors: cols[0] = first column, cols[1] = second column. */
+    vec2 cols[2]; /**< @brief Column vectors: cols[0] = first column, cols[1] = second column. */
 };
 
 /**
  * @brief Column-major 3x3 matrix.
  *
- * Each column is a @c vec3 with an implicit pad lane to allow aligned
- * 128-bit SIMD loads. The pad lane of each column is always zero.
+ * Each column is a @c vec3, whose 16-byte alignment allows an aligned 128-bit load. The
+ * fourth lane of a column is padding, cleared by the conversions that would consume it.
  */
 export struct alignas(16) mat3 {
-    vec3 cols[3]{}; /**< @brief Column vectors. */
+    vec3 cols[3]; /**< @brief Column vectors. */
 };
 
 /**
@@ -127,7 +130,7 @@ export struct alignas(16) mat3 {
  * Standard column-major layout: @c cols[j][i] = element at row @c i, column @c j.
  */
 export struct alignas(64) mat4 {
-    vec4 cols[4]{}; /**< @brief Column vectors: cols[j] is the j-th column. */
+    vec4 cols[4]; /**< @brief Column vectors: cols[j] is the j-th column. */
 };
 
 /* ============================================================
@@ -160,8 +163,8 @@ export struct alignas(16) quat {
  * A box is considered valid when @c min <= max element-wise.
  */
 export struct alignas(16) box2d {
-    vec2 min{}; /**< @brief Minimum corner. */
-    vec2 max{}; /**< @brief Maximum corner. */
+    vec2 min; /**< @brief Minimum corner. */
+    vec2 max; /**< @brief Maximum corner. */
 };
 
 /**
@@ -171,8 +174,8 @@ export struct alignas(16) box2d {
  * A box is considered valid when @c min <= max element-wise.
  */
 export struct alignas(16) box3d {
-    vec3 min{}; /**< @brief Minimum corner. */
-    vec3 max{}; /**< @brief Maximum corner. */
+    vec3 min; /**< @brief Minimum corner. */
+    vec3 max; /**< @brief Maximum corner. */
 };
 
 /**
@@ -307,6 +310,16 @@ export struct alignas(16) transform {
     quat rotation{0.0f, 0.0f, 0.0f, 1.0f}; ///< @brief Rotation, identity by default.
     vec3 scale{1.0f, 1.0f, 1.0f};          ///< @brief Scale; the transform math assumes it is uniform.
 };
+
+/* The storage types exist to be held in bulk without being constructed; a stray default
+ * member initialiser would take that away silently, so it is asserted rather than assumed. */
+static_assert(std::is_trivially_default_constructible_v<vec2> && std::is_trivially_default_constructible_v<vec3> &&
+              std::is_trivially_default_constructible_v<vec4> && std::is_trivially_default_constructible_v<ivec2> &&
+              std::is_trivially_default_constructible_v<ivec3> && std::is_trivially_default_constructible_v<box2d> &&
+              std::is_trivially_default_constructible_v<box3d> && std::is_trivially_default_constructible_v<mat2> &&
+              std::is_trivially_default_constructible_v<mat3> && std::is_trivially_default_constructible_v<mat4>);
+
+static_assert(sizeof(vec3) == 16 && alignof(vec3) == 16, "vec3 must still fill an SSE register");
 
 /* ============================================================
  * Concepts

@@ -127,6 +127,12 @@ template <> inline __m128 safe_divisor<vec3>(__m128 v) noexcept {
     return _mm_blend_ps(v, _mm_set1_ps(1.0f), 0b1000);
 }
 
+/* A vec3's fourth lane is padding, so its value is unspecified. Zero it wherever a lane is
+ * consumed as data instead of masked out of a reduction. */
+inline __m128 clear_pad(const __m128 v) noexcept {
+    return _mm_blend_ps(v, _mm_setzero_ps(), 0b1000);
+}
+
 template <> inline __m128 safe_divisor<vec2>(__m128 v) noexcept {
     /* Replace lanes 2 and 3 with 1.0f */
     return _mm_blend_ps(v, _mm_set1_ps(1.0f), 0b1100);
@@ -1306,15 +1312,15 @@ inline mat3 to_mat3(const mat4& m) noexcept {
 }
 
 inline mat4 to_mat4(const mat3& m) noexcept {
-    return store_cols(_mm_load_ps(&m.cols[0].x), /* w=0 from vec3 padding */
-        _mm_load_ps(&m.cols[1].x), _mm_load_ps(&m.cols[2].x), _mm_setr_ps(0.0f, 0.0f, 0.0f, 1.0f));
+    return store_cols(
+        clear_pad(_mm_load_ps(&m.cols[0].x)), clear_pad(_mm_load_ps(&m.cols[1].x)), clear_pad(_mm_load_ps(&m.cols[2].x)), _mm_setr_ps(0.0f, 0.0f, 0.0f, 1.0f));
 }
 
 /* Embed mat3 + translation into mat4. */
 inline mat4 to_mat4(const mat3& m, const vec3& translation) noexcept {
     auto t{_mm_load_ps(&translation.x)};
     t = _mm_blend_ps(t, _mm_set1_ps(1.0f), 0b1000); /* {tx, ty, tz, 1} */
-    return store_cols(_mm_load_ps(&m.cols[0].x), _mm_load_ps(&m.cols[1].x), _mm_load_ps(&m.cols[2].x), t);
+    return store_cols(clear_pad(_mm_load_ps(&m.cols[0].x)), clear_pad(_mm_load_ps(&m.cols[1].x)), clear_pad(_mm_load_ps(&m.cols[2].x)), t);
 }
 
 /* Extract translation from mat4 */

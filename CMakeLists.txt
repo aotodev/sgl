@@ -118,6 +118,9 @@ else()
         -Wold-style-cast
         -Wundef
         -Wuninitialized
+        # off: partial aggregate init of a vector or matrix value-initialises the rest, which
+        # is the intent, not an oversight.
+        -Wno-missing-field-initializers
         -Werror
     )
 

@@ -3,6 +3,7 @@
  * @brief Unit tests for matrix operations (mat2, mat3, mat4).
  */
 #include <cstddef>
+#include <cstring>
 
 #include <gtest/gtest.h>
 
@@ -204,6 +205,40 @@ TEST(Mat4, ToMat4FromMat3WithTranslation) {
     EXPECT_FLOAT_EQ(m4.cols[3].x, 1);
     EXPECT_FLOAT_EQ(m4.cols[3].y, 2);
     EXPECT_FLOAT_EQ(m4.cols[3].z, 3);
+    EXPECT_FLOAT_EQ(m4.cols[3].w, 1);
+}
+
+/* A vec3's fourth lane is padding: unspecified after aggregate initialisation, and written
+ * with whatever a previous full-width SIMD store produced. `to_mat4` consumes each column as
+ * a whole register, so it has to clear that lane rather than trust it. The tests above use
+ * `mat3_identity`, whose padding is clean, which is why this needs its own case. */
+TEST(Mat4, ToMat4IgnoresColumnPadding) {
+    sgl::mat3 m3 = sgl::mat3_identity;
+
+    const float junk = 7777.0f;
+    for (std::size_t c = 0; c < 3; ++c) {
+        std::memcpy(reinterpret_cast<char*>(&m3.cols[c]) + 3 * sizeof(float), &junk, sizeof(junk));
+    }
+
+    const auto m4 = sgl::to_mat4(m3);
+    EXPECT_FLOAT_EQ(m4.cols[0].w, 0);
+    EXPECT_FLOAT_EQ(m4.cols[1].w, 0);
+    EXPECT_FLOAT_EQ(m4.cols[2].w, 0);
+    EXPECT_FLOAT_EQ(m4.cols[3].w, 1);
+}
+
+TEST(Mat4, ToMat4WithTranslationIgnoresColumnPadding) {
+    sgl::mat3 m3 = sgl::mat3_identity;
+
+    const float junk = -1234.0f;
+    for (std::size_t c = 0; c < 3; ++c) {
+        std::memcpy(reinterpret_cast<char*>(&m3.cols[c]) + 3 * sizeof(float), &junk, sizeof(junk));
+    }
+
+    const auto m4 = sgl::to_mat4(m3, sgl::vec3{1, 2, 3});
+    EXPECT_FLOAT_EQ(m4.cols[0].w, 0);
+    EXPECT_FLOAT_EQ(m4.cols[1].w, 0);
+    EXPECT_FLOAT_EQ(m4.cols[2].w, 0);
     EXPECT_FLOAT_EQ(m4.cols[3].w, 1);
 }
 

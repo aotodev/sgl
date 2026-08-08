@@ -1248,12 +1248,19 @@ inline mat3 to_mat3(const mat4& m) noexcept {
     return r;
 }
 
+/* @see the AVX `clear_pad`. */
+inline float32x4_t clear_pad(const float32x4_t v) noexcept {
+    return vsetq_lane_f32(0.0f, v, 3);
+}
+
 inline mat4 to_mat4(const mat3& m) noexcept {
-    return store_cols(vld1q_f32(&m.cols[0].x), vld1q_f32(&m.cols[1].x), vld1q_f32(&m.cols[2].x), vsetq_lane_f32(1.0f, vdupq_n_f32(0.0f), 3));
+    return store_cols(
+        clear_pad(vld1q_f32(&m.cols[0].x)), clear_pad(vld1q_f32(&m.cols[1].x)), clear_pad(vld1q_f32(&m.cols[2].x)), vsetq_lane_f32(1.0f, vdupq_n_f32(0.0f), 3));
 }
 
 inline mat4 to_mat4(const mat3& m, const vec3& translation) noexcept {
-    return store_cols(vld1q_f32(&m.cols[0].x), vld1q_f32(&m.cols[1].x), vld1q_f32(&m.cols[2].x), vsetq_lane_f32(1.0f, vld1q_f32(&translation.x), 3));
+    return store_cols(clear_pad(vld1q_f32(&m.cols[0].x)), clear_pad(vld1q_f32(&m.cols[1].x)), clear_pad(vld1q_f32(&m.cols[2].x)),
+        vsetq_lane_f32(1.0f, vld1q_f32(&translation.x), 3));
 }
 
 inline vec3 get_translation(const mat4& m) noexcept {
