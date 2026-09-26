@@ -41,6 +41,12 @@ constexpr std::size_t block_size{64};
 template <class T, std::size_t D> struct point_kind {};
 template <class T, std::size_t D> struct box_kind {};
 
+/** @brief A closed axis-aligned box of any element type, for queries and bounds beyond the float vocabulary types. */
+template <class T, std::size_t D> struct aabb {
+    std::array<T, D> min;
+    std::array<T, D> max;
+};
+
 /**
  * @brief @c D coordinate arrays of @c size elements each. Pointers need no alignment.
  *
@@ -117,7 +123,11 @@ template <class T, std::size_t D, std::size_t Pad> constexpr boxes<T, D, Pad> ma
 
 namespace sgl::detail {
 
-template <class T, std::size_t D> struct soa_vocab;
+/* Element type T in D dimensions maps to the core vocabulary box where one exists (float),
+ * and to soa::aabb otherwise. */
+template <class T, std::size_t D> struct soa_vocab {
+    using box = soa::aabb<T, D>;
+};
 template <> struct soa_vocab<float, 2> {
     using vec = vec2;
     using box = box2d;
@@ -127,14 +137,35 @@ template <> struct soa_vocab<float, 3> {
     using box = box3d;
 };
 
-template <class T, std::size_t D> using soa_vec_t = typename soa_vocab<T, D>::vec;
 template <class T, std::size_t D> using soa_box_t = typename soa_vocab<T, D>::box;
 
-template <class V> constexpr std::size_t dimension_of = 0;
-template <> constexpr std::size_t dimension_of<vec2> = 2;
-template <> constexpr std::size_t dimension_of<vec3> = 3;
+/* Core point types usable as queries: their element type and dimension. */
+template <class V> struct vocab_point;
+template <> struct vocab_point<vec2> {
+    using value_type = float;
+    static constexpr std::size_t dimension{2};
+};
+template <> struct vocab_point<vec3> {
+    using value_type = float;
+    static constexpr std::size_t dimension{3};
+};
+template <> struct vocab_point<ivec2> {
+    using value_type = std::int32_t;
+    static constexpr std::size_t dimension{2};
+};
+template <> struct vocab_point<ivec3> {
+    using value_type = std::int32_t;
+    static constexpr std::size_t dimension{3};
+};
+
+template <class V>
+concept vocab_point_type = requires { vocab_point<std::remove_cvref_t<V>>::dimension; };
+
+template <class V> constexpr std::size_t dimension_of = vocab_point<V>::dimension;
 template <> constexpr std::size_t dimension_of<box2d> = 2;
 template <> constexpr std::size_t dimension_of<box3d> = 3;
+
+template <class V> using point_value_t = typename vocab_point<V>::value_type;
 
 constexpr std::array<float, 2> coords(const vec2& v) noexcept {
     return {v.x, v.y};
@@ -142,14 +173,26 @@ constexpr std::array<float, 2> coords(const vec2& v) noexcept {
 constexpr std::array<float, 3> coords(const vec3& v) noexcept {
     return {v.x, v.y, v.z};
 }
+constexpr std::array<std::int32_t, 2> coords(const ivec2& v) noexcept {
+    return {v.x, v.y};
+}
+constexpr std::array<std::int32_t, 3> coords(const ivec3& v) noexcept {
+    return {v.x, v.y, v.z};
+}
 
-template <class T, std::size_t D> constexpr soa_vec_t<T, D> to_vec(const std::array<T, D>& c) noexcept {
-    if constexpr (D == 2) {
-        return {c[0], c[1]};
+template <class T, std::size_t D> constexpr soa_box_t<T, D> to_box(const std::array<T, D>& lo, const std::array<T, D>& hi) noexcept {
+    if constexpr (std::same_as<soa_box_t<T, D>, soa::aabb<T, D>>) {
+        return {lo, hi};
+    } else if constexpr (D == 2) {
+        return {{lo[0], lo[1]}, {hi[0], hi[1]}};
     } else {
-        return {c[0], c[1], c[2]};
+        return {{lo[0], lo[1], lo[2]}, {hi[0], hi[1], hi[2]}};
     }
 }
+
+/* The identity of min / max: +-inf where the type has it, the extreme values otherwise. */
+template <class T> constexpr T empty_min{std::numeric_limits<T>::has_infinity ? std::numeric_limits<T>::infinity() : std::numeric_limits<T>::max()};
+template <class T> constexpr T empty_max{std::numeric_limits<T>::has_infinity ? -std::numeric_limits<T>::infinity() : std::numeric_limits<T>::lowest()};
 
 constexpr std::size_t round_up(const std::size_t n, const std::size_t m) noexcept {
     return (n + m - 1) / m * m;
@@ -432,8 +475,8 @@ public:
 
     void push_back(const std::array<T, D>& p) { arrays_.push_back(p); }
 
-    template <spatial_vector Vec>
-        requires(std::same_as<T, float> && detail::dimension_of<Vec> == D)
+    template <detail::vocab_point_type Vec>
+        requires(std::same_as<T, detail::point_value_t<Vec>> && detail::dimension_of<Vec> == D)
     void push_back(const Vec& p) {
         arrays_.push_back(detail::coords(p));
     }
@@ -490,6 +533,8 @@ public:
     void push_back(const Box& b) {
         push_back(detail::coords(b.min), detail::coords(b.max));
     }
+
+    void push_back(const aabb<T, D>& b) { push_back(b.min, b.max); }
 
     boxes<T, D, block_size> view() const noexcept {
         return {[&]<std::size_t... A>(std::index_sequence<A...>) { return std::array<const T*, D>{arrays_.array(A)...}; }(std::make_index_sequence<D>{}),
@@ -559,7 +604,7 @@ template <class T, std::size_t D> struct contains_point {
 };
 
 /** @brief Closed boxes hit by the ray origin + t * direction for some t in [t_min, t_max]. */
-template <class T, std::size_t D> struct ray_hit {
+template <std::floating_point T, std::size_t D> struct ray_hit {
     using kind = box_kind<T, D>;
     std::array<T, D> origin;
     std::array<T, D> inv_dir;
@@ -630,14 +675,26 @@ template <box_type Box> constexpr inside_box<float, detail::dimension_of<Box>> i
     return {detail::coords(box.min), detail::coords(box.max)};
 }
 
+template <class T, std::size_t D> constexpr inside_box<T, D> inside(const aabb<T, D>& box) noexcept {
+    return {box.min, box.max};
+}
+
 /** @brief Boxes overlapping @p box (closed). */
 template <box_type Box> constexpr overlaps_box<float, detail::dimension_of<Box>> overlaps(const Box& box) noexcept {
     return {detail::coords(box.min), detail::coords(box.max)};
 }
 
+template <class T, std::size_t D> constexpr overlaps_box<T, D> overlaps(const aabb<T, D>& box) noexcept {
+    return {box.min, box.max};
+}
+
 /** @brief Boxes containing @p point (closed). */
-template <spatial_vector Vec> constexpr contains_point<float, detail::dimension_of<Vec>> contains(const Vec& point) noexcept {
+template <detail::vocab_point_type Vec> constexpr contains_point<detail::point_value_t<Vec>, detail::dimension_of<Vec>> contains(const Vec& point) noexcept {
     return {detail::coords(point)};
+}
+
+template <class T, std::size_t D> constexpr contains_point<T, D> contains(const std::array<T, D>& point) noexcept {
+    return {point};
 }
 
 /**
@@ -648,16 +705,20 @@ template <spatial_vector Vec> constexpr contains_point<float, detail::dimension_
  * the finite range. A NaN coordinate in a box makes its result unspecified (but the same on
  * every backend).
  */
+template <std::floating_point T, std::size_t D>
+ray_hit<T, D> hit_by(
+    const std::array<T, D>& origin, const std::array<T, D>& direction, const T t_min = 0, const T t_max = std::numeric_limits<T>::infinity()) noexcept {
+    std::array<T, D> inv{};
+    for (std::size_t a{}; a < D; ++a) {
+        inv[a] = T{1} / direction[a];
+    }
+    return {origin, inv, t_min, t_max};
+}
+
 template <spatial_vector Vec>
 ray_hit<float, detail::dimension_of<Vec>> hit_by(
     const Vec& origin, const Vec& direction, const float t_min = 0.0f, const float t_max = std::numeric_limits<float>::infinity()) noexcept {
-    constexpr std::size_t D{detail::dimension_of<Vec>};
-    const auto d{detail::coords(direction)};
-    std::array<float, D> inv{};
-    for (std::size_t a{}; a < D; ++a) {
-        inv[a] = 1.0f / d[a];
-    }
-    return {detail::coords(origin), inv, t_min, t_max};
+    return hit_by(detail::coords(origin), detail::coords(direction), t_min, t_max);
 }
 
 /* ============================================================
@@ -720,7 +781,7 @@ template <class R, predicate_for<R> P> std::size_t match_indices(const R& range,
     using V = decltype(detail::as_view(range));
     using wide = detail::batch<typename V::value_type, detail::native_isa>;
     using compactor = detail::index_compactor<detail::native_isa>;
-    static_assert(compactor::width == wide::width, "one compactor store per batch");
+    static_assert(!(compactor::width % wide::width), "a compactor store covers whole batches");
     constexpr std::size_t lanes{wide::width};
     constexpr std::size_t chunks{block_size / lanes};
     /* At or below this many matches in a block, walking the set bits beats storing every chunk. */
@@ -759,9 +820,17 @@ template <class R, predicate_for<R> P> std::size_t match_indices(const R& range,
                 dst[n++] = first + static_cast<std::uint32_t>(std::countr_zero(word));
             }
         } else {
-            /* Stores whole chunks, up to a block past the count: covered by the room check above. */
-            for (std::size_t c{}; c < chunks; ++c) {
-                n += compactor::store(dst + n, first + static_cast<std::uint32_t>(c * lanes), m[c]);
+            /* Stores whole chunks, up to a block past the count: covered by the room check above.
+             * Batches narrower than the compactor (double) are fed from slices of the word. */
+            if constexpr (compactor::width == lanes) {
+                for (std::size_t c{}; c < chunks; ++c) {
+                    n += compactor::store(dst + n, first + static_cast<std::uint32_t>(c * lanes), m[c]);
+                }
+            } else {
+                constexpr std::uint64_t slice{(std::uint64_t{1} << compactor::width) - 1};
+                for (std::size_t k{}; k < block_size; k += compactor::width) {
+                    n += compactor::store(dst + n, first + static_cast<std::uint32_t>(k), static_cast<std::uint32_t>((word >> k) & slice));
+                }
             }
         }
     }
@@ -830,8 +899,9 @@ std::size_t hit_distances(const R& range, const ray_hit<T, D>& ray, const std::s
 /**
  * @brief Axis-aligned bounds of the points. NaN coordinates are skipped.
  *
- * An empty range gives the inverted box min = +inf, max = -inf, which is_valid rejects and
- * merge treats as the identity.
+ * Returns the core box type for float and aabb<T, D> otherwise. An empty range gives the
+ * inverted box min = +inf, max = -inf (the extreme values for integers), which is_valid
+ * rejects and merge treats as the identity.
  */
 template <point_range R> auto bounds(const R& range) noexcept {
     using T = typename R::value_type;
@@ -839,19 +909,19 @@ template <point_range R> auto bounds(const R& range) noexcept {
     using V = decltype(detail::as_view(range));
     using wide = detail::batch<T, detail::native_isa>;
     constexpr std::size_t lanes{wide::width};
-    constexpr T inf{std::numeric_limits<T>::infinity()};
 
     const V view{detail::as_view(range)};
     const std::size_t n{view.size};
 
-    /* Two accumulator sets hide the min/max latency. */
-    auto lo0{detail::splat<wide, D>(inf)};
-    auto hi0{detail::splat<wide, D>(-inf)};
+    /* Floating point keeps two accumulator sets to hide the min/max latency. Integer min/max
+     * takes a cycle, and a second set would spill on AVX2 (12 accumulators plus loads). */
+    auto lo0{detail::splat<wide, D>(detail::empty_min<T>)};
+    auto hi0{detail::splat<wide, D>(detail::empty_max<T>)};
     auto lo1{lo0};
     auto hi1{hi0};
 
     std::size_t i{};
-    for (; i + 2 * lanes <= n; i += 2 * lanes) {
+    for (; std::floating_point<T> && i + 2 * lanes <= n; i += 2 * lanes) {
         for (std::size_t a{}; a < D; ++a) {
             const auto x0{wide::load(view.axis[a] + i)};
             const auto x1{wide::load(view.axis[a] + i + lanes)};
@@ -873,8 +943,8 @@ template <point_range R> auto bounds(const R& range) noexcept {
             const auto keep{wide::first_lanes(n - i)};
             for (std::size_t a{}; a < D; ++a) {
                 const auto x{wide::load(view.axis[a] + i)};
-                lo1[a] = min(select(keep, x, wide::broadcast(inf)), lo1[a]);
-                hi1[a] = max(select(keep, x, wide::broadcast(-inf)), hi1[a]);
+                lo1[a] = min(select(keep, x, wide::broadcast(detail::empty_min<T>)), lo1[a]);
+                hi1[a] = max(select(keep, x, wide::broadcast(detail::empty_max<T>)), hi1[a]);
             }
             i = n;
         }
@@ -891,7 +961,7 @@ template <point_range R> auto bounds(const R& range) noexcept {
             hi[a] = x > hi[a] ? x : hi[a];
         }
     }
-    return detail::soa_box_t<T, D>{detail::to_vec<T, D>(lo), detail::to_vec<T, D>(hi)};
+    return detail::to_box<T, D>(lo, hi);
 }
 
 } // namespace sgl::soa

@@ -11,6 +11,7 @@
 #include <cstdint>
 #include <limits>
 #include <random>
+#include <type_traits>
 #include <vector>
 
 import sgl;
@@ -472,7 +473,161 @@ void indices_ray_soa(benchmark::State& state) {
     set_items(state);
 }
 
+/* ------------------------------------------------------------
+ * Other element types: the same data and queries as float, converted (int32 scaled by 100)
+ * ------------------------------------------------------------ */
+
+template <class T> constexpr double type_scale{std::is_floating_point_v<T> ? 1.0 : 100.0};
+
+template <class T> T to_t(const float x) {
+    return static_cast<T>(static_cast<double>(x) * type_scale<T>);
+}
+
+template <class T> std::array<std::vector<T>, 3> typed_points(const std::size_t n) {
+    const auto d{make_points_data(n)};
+    std::array<std::vector<T>, 3> out;
+    for (std::size_t a{}; a < 3; ++a) {
+        out[a].reserve(n);
+        for (const float x : d.axis[a]) {
+            out[a].push_back(to_t<T>(x));
+        }
+    }
+    return out;
+}
+
+template <class T> sgl::soa::aabb<T, 3> typed_box(const sgl::box3d& b) {
+    return {{to_t<T>(b.min.x), to_t<T>(b.min.y), to_t<T>(b.min.z)}, {to_t<T>(b.max.x), to_t<T>(b.max.y), to_t<T>(b.max.z)}};
+}
+
+template <class T> void typed_points_in_box_count_soa(benchmark::State& state) {
+    const auto a{typed_points<T>(size_arg(state))};
+    const auto q{typed_box<T>(point_query)};
+    for (auto _ : state) {
+        benchmark::DoNotOptimize(sgl::soa::count(sgl::soa::make_points(a[0], a[1], a[2]), sgl::soa::inside(q)));
+    }
+    set_items(state);
+}
+
+template <class T> void typed_points_in_box_count_scalar(benchmark::State& state) {
+    const auto a{typed_points<T>(size_arg(state))};
+    const auto q{typed_box<T>(point_query)};
+    const auto& [x, y, z]{a};
+    for (auto _ : state) {
+        std::size_t c{};
+        for (std::size_t i{}; i < x.size(); ++i) {
+            c += static_cast<std::size_t>(
+                (q.min[0] <= x[i]) & (x[i] <= q.max[0]) & (q.min[1] <= y[i]) & (y[i] <= q.max[1]) & (q.min[2] <= z[i]) & (z[i] <= q.max[2]));
+        }
+        benchmark::DoNotOptimize(c);
+    }
+    set_items(state);
+}
+
+template <class T> void typed_indices_soa(benchmark::State& state) {
+    const auto a{typed_points<T>(size_arg(state))};
+    const auto q{typed_box<T>(point_query)};
+    std::vector<std::uint32_t> out(a[0].size());
+    for (auto _ : state) {
+        benchmark::DoNotOptimize(sgl::soa::match_indices(sgl::soa::make_points(a[0], a[1], a[2]), sgl::soa::inside(q), out));
+        benchmark::ClobberMemory();
+    }
+    set_items(state);
+}
+
+template <class T> void typed_bounds_soa(benchmark::State& state) {
+    const auto a{typed_points<T>(size_arg(state))};
+    for (auto _ : state) {
+        benchmark::DoNotOptimize(sgl::soa::bounds(sgl::soa::make_points(a[0], a[1], a[2])));
+    }
+    set_items(state);
+}
+
+template <class T> void typed_bounds_scalar(benchmark::State& state) {
+    const auto a{typed_points<T>(size_arg(state))};
+    for (auto _ : state) {
+        std::array<T, 3> lo{};
+        std::array<T, 3> hi{};
+        for (std::size_t k{}; k < 3; ++k) {
+            lo[k] = std::numeric_limits<T>::max();
+            hi[k] = std::numeric_limits<T>::lowest();
+            for (const T v : a[k]) {
+                lo[k] = v < lo[k] ? v : lo[k];
+                hi[k] = v > hi[k] ? v : hi[k];
+            }
+        }
+        benchmark::DoNotOptimize(lo);
+        benchmark::DoNotOptimize(hi);
+    }
+    set_items(state);
+}
+
+void double_ray_distances_soa(benchmark::State& state) {
+    const auto d{make_boxes_data(size_arg(state))};
+    std::array<std::vector<double>, 3> lo;
+    std::array<std::vector<double>, 3> hi;
+    for (std::size_t a{}; a < 3; ++a) {
+        lo[a].assign(d.lo[a].begin(), d.lo[a].end());
+        hi[a].assign(d.hi[a].begin(), d.hi[a].end());
+    }
+    const auto view{sgl::soa::make_boxes(sgl::soa::make_points(lo[0], lo[1], lo[2]), sgl::soa::make_points(hi[0], hi[1], hi[2]))};
+    const auto ray{sgl::soa::hit_by(std::array<double, 3>{ray_origin.x, ray_origin.y, ray_origin.z}, std::array<double, 3>{ray_dir.x, ray_dir.y, ray_dir.z})};
+    std::vector<double> t(d.aos.size());
+    for (auto _ : state) {
+        benchmark::DoNotOptimize(sgl::soa::hit_distances(view, ray, t));
+        benchmark::ClobberMemory();
+    }
+    set_items(state);
+}
+
+void double_ray_distances_scalar(benchmark::State& state) {
+    const auto d{make_boxes_data(size_arg(state))};
+    std::array<std::vector<double>, 3> lo;
+    std::array<std::vector<double>, 3> hi;
+    for (std::size_t a{}; a < 3; ++a) {
+        lo[a].assign(d.lo[a].begin(), d.lo[a].end());
+        hi[a].assign(d.hi[a].begin(), d.hi[a].end());
+    }
+    const std::size_t n{d.aos.size()};
+    std::vector<double> t(n);
+    const std::array<double, 3> o{ray_origin.x, ray_origin.y, ray_origin.z};
+    const std::array<double, 3> inv{1.0 / ray_dir.x, 1.0 / ray_dir.y, 1.0 / ray_dir.z};
+    for (auto _ : state) {
+        std::size_t hits{};
+        for (std::size_t i{}; i < n; ++i) {
+            double t_near{0.0};
+            double t_far{std::numeric_limits<double>::infinity()};
+            for (std::size_t a{}; a < 3; ++a) {
+                const double t1{(lo[a][i] - o[a]) * inv[a]};
+                const double t2{(hi[a][i] - o[a]) * inv[a]};
+                t_near = std::max(t_near, std::min(t1, t2));
+                t_far = std::min(t_far, std::max(t1, t2));
+            }
+            const bool hit{t_near <= t_far};
+            t[i] = hit ? t_near : std::numeric_limits<double>::infinity();
+            hits += hit ? 1u : 0u;
+        }
+        benchmark::DoNotOptimize(hits);
+        benchmark::ClobberMemory();
+    }
+    set_items(state);
+}
+
 } // namespace
+
+#define SGL_BENCH_TYPED(fn, T) BENCHMARK_TEMPLATE(fn, T)->Arg(1 << 12)->Arg(1 << 18)
+
+SGL_BENCH_TYPED(typed_points_in_box_count_soa, double);
+SGL_BENCH_TYPED(typed_points_in_box_count_scalar, double);
+SGL_BENCH_TYPED(typed_points_in_box_count_soa, std::int32_t);
+SGL_BENCH_TYPED(typed_points_in_box_count_scalar, std::int32_t);
+SGL_BENCH_TYPED(typed_indices_soa, double);
+SGL_BENCH_TYPED(typed_indices_soa, std::int32_t);
+SGL_BENCH_TYPED(typed_bounds_soa, double);
+SGL_BENCH_TYPED(typed_bounds_scalar, double);
+SGL_BENCH_TYPED(typed_bounds_soa, std::int32_t);
+SGL_BENCH_TYPED(typed_bounds_scalar, std::int32_t);
+BENCHMARK(double_ray_distances_soa)->Arg(1 << 12)->Arg(1 << 18);
+BENCHMARK(double_ray_distances_scalar)->Arg(1 << 12)->Arg(1 << 18);
 
 #define SGL_BENCH_DENSITY(fn) BENCHMARK(fn)->ArgsProduct({{1 << 12}, {1, 5, 12, 25, 50, 90, 100}})
 

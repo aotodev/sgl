@@ -2,7 +2,15 @@
 
 `sgl::soa` runs one query against many primitives stored as structure-of-arrays: one
 contiguous array per coordinate. The kernels are written once against an internal SIMD
-wrapper and run 8 lanes wide on AVX2, 4 on NEON, and 1 on the scalar fallback.
+wrapper and work on `float`, `double` and `int32_t` coordinates:
+
+| Element type | AVX2 lanes | NEON lanes |
+| --- | --- | --- |
+| `float` | 8 | 4 |
+| `double` | 4 | 2 |
+| `int32_t` | 8 | 4 |
+
+The scalar fallback runs 1 lane.
 
 ```cpp
 import sgl;
@@ -52,6 +60,22 @@ view. `reserve` up front to allocate once; `axis(a)` (or `min_axis` / `max_axis`
 span to fill in bulk; `push_back` takes a `vec` / `box` or coordinate arrays; new elements
 from `resize` are zero. Copies follow pmr: copy construction uses the default resource
 unless one is passed, and assignment keeps the target's resource.
+
+## Element types and query types
+
+`float` queries use the core types (`vec2`/`vec3`, `box2d`/`box3d`). Every element type
+also takes `std::array<T, D>` points and `aabb<T, D>` boxes, and `int32_t` takes
+`ivec2`/`ivec3` points. `bounds` returns the core box for `float` and `aabb<T, D>`
+otherwise; for integers its empty result is (INT_MAX, INT_MIN). `hit_by` is floating
+point only. There are no short aliases for `double` and `int32_t` ranges (use
+`points<double, 3>`, `point_buffer<std::int32_t, 2>` and so on): `3d` would read as a
+dimension next to `box3d`.
+
+```cpp
+sgl::soa::point_buffer<std::int32_t, 2> cells;
+cells.push_back(sgl::ivec2{3, 4});
+std::size_t n{sgl::soa::count(cells, sgl::soa::inside(sgl::soa::aabb<std::int32_t, 2>{{0, 0}, {9, 9}}))};
+```
 
 ## Predicates
 
@@ -131,6 +155,19 @@ batch's mask straight from a compile-time table of bit positions:
 | 12% | 7.3 / 7.0 | 6.3 / 7.5 | 4.4 / 0.6 |
 | 50% | 6.6 / 6.3 | 2.9 / 3.1 | 4.3 / 0.6 |
 | 100% | 6.3 / 6.0 | 1.8 / 1.7 | 4.2 / 0.6 |
+
+Other element types, 4096 elements (G elements per second, Clang / GCC):
+
+| Query | `double` SoA | `double` scalar | `int32_t` SoA | `int32_t` scalar |
+| --- | --- | --- | --- | --- |
+| points in box, count | 4.8 / 4.8 | 4.1 / 4.9 | 8.2 / 9.6 | 7.2 / 5.6 |
+| points in box, indices (25%) | 3.3 / 3.3 | | 6.5 / 6.0 | |
+| bounds | 6.2 / 5.6 | 0.8 / 0.8 | 11.4 / 10.8 | 11.9 / 0.8 |
+| ray vs boxes, entry distances | 2.0 / 2.0 | 1.9 / 1.8 | | |
+
+`double` compares vectorise well without help, and at 48 bytes a box the ray query is
+already L2 bound at 4096 boxes; the clear `double` win is bounds. For integer bounds Clang
+vectorises the plain loop itself; GCC does not.
 
 Past the caches every query is bandwidth bound and the variants converge (about 2.5 to 2.9 G
 points per second at 4 Mi points). Reproduce with `-DSGL_BENCHMARKS=ON` and
