@@ -74,6 +74,7 @@ Composing predicates over different ranges does not compile.
 | `count(range, pred)` | number of matches |
 | `any(range, pred)` | whether anything matches; stops after the first block of 64 that does |
 | `for_each_match(range, pred, fn)` | calls `fn(index)` for every match, in increasing order |
+| `match_indices(range, pred, out)` | writes the `uint32_t` indices of the matches to `out` in increasing order and returns how many; `size` entries of room always suffice, a shorter span gets the first `out.size()` matches, entries past the count are unspecified |
 | `hit_distances(boxes, hit_by(...), t)` | per box, the entry distance `max(t_min, entry)` on a hit and `+inf` on a miss; returns the hit count |
 | `bounds(points)` | the bounding box; NaN coordinates are skipped, an empty range gives min = +inf, max = -inf |
 
@@ -119,6 +120,17 @@ Short ranges, points in box, count (the padded buffer has no scalar tail):
 | 13 | 1.1 G / 2.0 G | 2.7 G / 5.1 G | 2.4 G / 2.8 G |
 | 100 | 4.4 G / 7.5 G | 5.0 G / 9.3 G | 3.5 G / 6.0 G |
 | 1000 | 7.8 G / 10.0 G | 7.8 G / 10.0 G | 3.9 G / 6.6 G |
+
+Index compaction by match density, 4096 points in box (G points per second, Clang / GCC).
+`match_indices` walks the set bits of sparse blocks and stores whole vectors from a
+compile-time table of bit positions in dense ones:
+
+| Density | `match_indices` | `for_each_match` into an array | branchless scalar (`out[w] = i; w += hit;`) |
+| --- | --- | --- | --- |
+| 1% | 7.5 / 8.9 | 7.9 / 9.3 | 4.1 / 0.6 |
+| 12% | 5.5 / 6.8 | 6.1 / 7.4 | 4.3 / 0.6 |
+| 50% | 4.0 / 5.7 | 2.6 / 3.1 | 4.2 / 0.6 |
+| 100% | 4.6 / 5.5 | 1.6 / 1.7 | 4.3 / 0.6 |
 
 Past the caches every query is bandwidth bound and the variants converge (about 2.5 to 2.9 G
 points per second at 4 Mi points). Reproduce with `-DSGL_BENCHMARKS=ON` and

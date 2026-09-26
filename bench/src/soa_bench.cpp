@@ -6,6 +6,7 @@
 #include <algorithm>
 #include <array>
 #include <benchmark/benchmark.h>
+#include <cmath>
 #include <cstddef>
 #include <cstdint>
 #include <limits>
@@ -409,7 +410,76 @@ void bounds_aos(benchmark::State& state) {
     set_items(state);
 }
 
+/* ------------------------------------------------------------
+ * Index compaction, by match density: range(0) points, range(1) percent inside
+ * ------------------------------------------------------------ */
+
+sgl::box3d density_query(const benchmark::State& state) {
+    const float side{100.0f * std::cbrt(static_cast<float>(state.range(1)) / 100.0f)};
+    return {{0.0f, 0.0f, 0.0f}, {side, side, side}};
+}
+
+void indices_soa(benchmark::State& state) {
+    const auto d{make_points_data(size_arg(state))};
+    const auto q{density_query(state)};
+    std::vector<std::uint32_t> out(d.aos.size());
+    for (auto _ : state) {
+        benchmark::DoNotOptimize(sgl::soa::match_indices(d.view(), sgl::soa::inside(q), out));
+        benchmark::ClobberMemory();
+    }
+    set_items(state);
+}
+
+void indices_for_each_match(benchmark::State& state) {
+    const auto d{make_points_data(size_arg(state))};
+    const auto q{density_query(state)};
+    std::vector<std::uint32_t> out(d.aos.size());
+    for (auto _ : state) {
+        std::size_t w{};
+        sgl::soa::for_each_match(d.view(), sgl::soa::inside(q), [&](const std::size_t i) { out[w++] = static_cast<std::uint32_t>(i); });
+        benchmark::DoNotOptimize(w);
+        benchmark::ClobberMemory();
+    }
+    set_items(state);
+}
+
+/* The classic branchless compaction: always store, advance by the predicate. */
+void indices_scalar_branchless(benchmark::State& state) {
+    const auto d{make_points_data(size_arg(state))};
+    const auto q{density_query(state)};
+    const auto& [x, y, z]{d.axis};
+    std::vector<std::uint32_t> out(x.size() + 1);
+    for (auto _ : state) {
+        std::size_t w{};
+        for (std::size_t i{}; i < x.size(); ++i) {
+            out[w] = static_cast<std::uint32_t>(i);
+            w +=
+                static_cast<std::size_t>((q.min.x <= x[i]) & (x[i] <= q.max.x) & (q.min.y <= y[i]) & (y[i] <= q.max.y) & (q.min.z <= z[i]) & (z[i] <= q.max.z));
+        }
+        benchmark::DoNotOptimize(w);
+        benchmark::ClobberMemory();
+    }
+    set_items(state);
+}
+
+void indices_ray_soa(benchmark::State& state) {
+    const auto d{make_boxes_data(size_arg(state))};
+    std::vector<std::uint32_t> out(d.aos.size());
+    for (auto _ : state) {
+        benchmark::DoNotOptimize(sgl::soa::match_indices(d.view(), sgl::soa::hit_by(ray_origin, ray_dir), out));
+        benchmark::ClobberMemory();
+    }
+    set_items(state);
+}
+
 } // namespace
+
+#define SGL_BENCH_DENSITY(fn) BENCHMARK(fn)->ArgsProduct({{1 << 12}, {1, 5, 12, 25, 50, 90, 100}})
+
+SGL_BENCH_DENSITY(indices_soa);
+SGL_BENCH_DENSITY(indices_for_each_match);
+SGL_BENCH_DENSITY(indices_scalar_branchless);
+BENCHMARK(indices_ray_soa)->Arg(1 << 12)->Arg(1 << 18);
 
 /* 4 Ki fits L1/L2, 256 Ki spills to L3, 4 Mi is memory bound. */
 #define SGL_BENCH(fn) BENCHMARK(fn)->Arg(1 << 12)->Arg(1 << 18)->Arg(1 << 22)

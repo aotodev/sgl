@@ -230,6 +230,28 @@ template <class V, class P, class F> void scan_words(const V& view, const P& pre
     const auto wide_pred{pred.template bind<wide>(view)};
     const std::size_t n{view.size};
 
+    const auto tail_word{[&](const std::size_t base) noexcept {
+        const std::size_t rem{n - base};
+        std::uint64_t word{};
+        if constexpr (padded_for<V, wide>) {
+            for (std::size_t k{}; k < rem; k += lanes) {
+                word |= std::uint64_t{wide_pred(base + k).bits()} << k;
+            }
+            word &= (std::uint64_t{1} << rem) - 1;
+        } else {
+            using narrow = batch<T, scalar_isa>;
+            const auto narrow_pred{pred.template bind<narrow>(view)};
+            std::size_t k{};
+            for (; k + lanes <= rem; k += lanes) {
+                word |= std::uint64_t{wide_pred(base + k).bits()} << k;
+            }
+            for (; k < rem; ++k) {
+                word |= std::uint64_t{narrow_pred(base + k).bits()} << k;
+            }
+        }
+        return word;
+    }};
+
     std::size_t base{};
     for (; base + soa::block_size <= n; base += soa::block_size) {
         std::uint64_t word{};
@@ -240,29 +262,9 @@ template <class V, class P, class F> void scan_words(const V& view, const P& pre
             return;
         }
     }
-    if (base == n) {
-        return;
+    if (base < n) {
+        on_word(base / soa::block_size, tail_word(base));
     }
-
-    const std::size_t rem{n - base};
-    std::uint64_t word{};
-    if constexpr (padded_for<V, wide>) {
-        for (std::size_t k{}; k < rem; k += lanes) {
-            word |= std::uint64_t{wide_pred(base + k).bits()} << k;
-        }
-        word &= (std::uint64_t{1} << rem) - 1;
-    } else {
-        using narrow = batch<T, scalar_isa>;
-        const auto narrow_pred{pred.template bind<narrow>(view)};
-        std::size_t k{};
-        for (; k + lanes <= rem; k += lanes) {
-            word |= std::uint64_t{wide_pred(base + k).bits()} << k;
-        }
-        for (; k < rem; ++k) {
-            word |= std::uint64_t{narrow_pred(base + k).bits()} << k;
-        }
-    }
-    on_word(base / soa::block_size, word);
 }
 
 /* N arrays of T in one 64-byte aligned allocation, all with the same capacity, a multiple of
@@ -698,6 +700,53 @@ template <class R, predicate_for<R> P, std::invocable<std::size_t> F> void for_e
         }
         return true;
     });
+}
+
+/**
+ * @brief Write the indices of the matching elements to @p out, in increasing order, and
+ *        return how many were written.
+ *
+ * @p out needs room for every match; @c size elements always suffice. A shorter span gets
+ * the first out.size() matches. Entries past the returned count are unspecified: the
+ * native path stores whole vectors. Ranges are limited to 2^32 elements.
+ */
+template <class R, predicate_for<R> P> std::size_t match_indices(const R& range, const P& pred, const std::span<std::uint32_t> out) noexcept {
+    using compactor = detail::index_compactor<detail::native_isa>;
+    constexpr std::size_t lanes{compactor::width};
+    constexpr std::uint64_t lane_bits{(std::uint64_t{1} << lanes) - 1};
+    /* At or below this many matches in a block, walking the set bits beats storing every chunk. */
+    constexpr int sparse_block{8};
+
+    const auto view{detail::as_view(range)};
+    assert(static_cast<std::uint64_t>(view.size) <= std::uint64_t{1} << 32);
+    std::uint32_t* const dst{out.data()};
+    const std::size_t room{out.size()};
+    std::size_t written{};
+
+    /* dst, room and the running count stay in registers: the compactor's memcpy store may
+     * alias anything, so anything reached through a reference is reloaded after each chunk. */
+    detail::scan_words(view, pred, [dst, room, &written](const std::size_t w, std::uint64_t bits) noexcept {
+        const auto base{static_cast<std::uint32_t>(w * block_size)};
+        std::size_t n{written};
+        if (n + block_size > room) {
+            /* Near the end of a short span: one match at a time, bounds checked. */
+            for (; bits && n < room; bits &= bits - 1) {
+                dst[n++] = base + static_cast<std::uint32_t>(std::countr_zero(bits));
+            }
+        } else if (std::popcount(bits) <= sparse_block) {
+            for (; bits; bits &= bits - 1) {
+                dst[n++] = base + static_cast<std::uint32_t>(std::countr_zero(bits));
+            }
+        } else {
+            /* Stores whole chunks, up to a block past the count: covered by the room check above. */
+            for (std::size_t k{}; k < block_size; k += lanes) {
+                n += compactor::store(dst + n, base + static_cast<std::uint32_t>(k), static_cast<std::uint32_t>((bits >> k) & lane_bits));
+            }
+        }
+        written = n;
+        return n < room;
+    });
+    return written;
 }
 
 /**

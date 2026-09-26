@@ -14,6 +14,8 @@
  */
 module;
 
+#include <array>
+#include <bit>
 #include <cstddef>
 #include <cstdint>
 #include <cstring>
@@ -182,6 +184,79 @@ template <> struct batch<float, neon_isa> {
     friend inline batch select(const mask m, const batch a, const batch b) noexcept { return {vbslq_f32(m.m, a.v, b.v)}; }
     friend inline float reduce_min(const batch a) noexcept { return vminvq_f32(a.v); }
     friend inline float reduce_max(const batch a) noexcept { return vmaxvq_f32(a.v); }
+};
+
+#endif
+
+/* ============================================================
+ * Index compaction: store(out, first, m) writes first + k for every set bit k of the
+ * width-bit mask m, packed at out, and returns how many. It always stores a full width
+ * of entries, so out needs room for width past the current count.
+ * ============================================================ */
+
+template <class Isa> struct index_compactor;
+
+template <> struct index_compactor<scalar_isa> {
+    static constexpr std::size_t width{1};
+
+    static constexpr std::size_t store(std::uint32_t* out, const std::uint32_t first, const std::uint32_t m) noexcept {
+        *out = first;
+        return m;
+    }
+};
+
+#if defined(SGL_BATCH_AVX2)
+
+/* Entry m packs the positions of the set bits of m, one per byte, lowest first. */
+inline constexpr std::array<std::uint64_t, 256> set_bit_positions8{[] {
+    std::array<std::uint64_t, 256> table{};
+    for (std::uint32_t m{}; m < 256; ++m) {
+        std::uint32_t k{};
+        for (std::uint32_t b{}; b < 8; ++b) {
+            if ((m >> b) & 1u) {
+                table[m] |= std::uint64_t{b} << (8 * k++);
+            }
+        }
+    }
+    return table;
+}()};
+
+template <> struct index_compactor<avx2_isa> {
+    static constexpr std::size_t width{8};
+
+    static inline std::size_t store(std::uint32_t* out, const std::uint32_t first, const std::uint32_t m) noexcept {
+        const __m256i positions{_mm256_cvtepu8_epi32(_mm_cvtsi64_si128(static_cast<long long>(set_bit_positions8[m])))};
+        const __m256i indices{_mm256_add_epi32(positions, _mm256_set1_epi32(static_cast<int>(first)))};
+        std::memcpy(out, &indices, sizeof indices);
+        return static_cast<std::size_t>(std::popcount(m));
+    }
+};
+
+#endif
+
+#if defined(SGL_BATCH_NEON)
+
+/* Entry m lists the positions of the set bits of m, lowest first. */
+inline constexpr std::array<std::array<std::uint32_t, 4>, 16> set_bit_positions4{[] {
+    std::array<std::array<std::uint32_t, 4>, 16> table{};
+    for (std::uint32_t m{}; m < 16; ++m) {
+        std::uint32_t k{};
+        for (std::uint32_t b{}; b < 4; ++b) {
+            if ((m >> b) & 1u) {
+                table[m][k++] = b;
+            }
+        }
+    }
+    return table;
+}()};
+
+template <> struct index_compactor<neon_isa> {
+    static constexpr std::size_t width{4};
+
+    static inline std::size_t store(std::uint32_t* out, const std::uint32_t first, const std::uint32_t m) noexcept {
+        vst1q_u32(out, vaddq_u32(vld1q_u32(set_bit_positions4[m].data()), vdupq_n_u32(first)));
+        return static_cast<std::size_t>(std::popcount(m));
+    }
 };
 
 #endif

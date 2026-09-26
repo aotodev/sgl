@@ -14,6 +14,7 @@
 #include <limits>
 #include <memory_resource>
 #include <random>
+#include <span>
 #include <string>
 #include <utility>
 #include <vector>
@@ -411,6 +412,100 @@ TEST(Soa, RayRangeAndDegenerateCases) {
     /* zero direction: every axis parallel, so it is a containment test of the origin */
     EXPECT_EQ(sgl::soa::count(view, sgl::soa::hit_by(origin, sgl::vec3{0.0f, 0.0f, 0.0f})), 1u);
     EXPECT_EQ(sgl::soa::count(view, sgl::soa::hit_by(origin, sgl::vec3{0.0f, 0.0f, 0.0f}, -inf, inf)), 1u);
+}
+
+/* ------------------------------------------------------------
+ * Index compaction
+ * ------------------------------------------------------------ */
+
+namespace {
+
+/* match_indices into the first `room` entries of a larger buffer, checking the rest is
+ * untouched and returning the written indices. */
+template <class R, class P> std::vector<std::uint32_t> run_match_indices(const R& range, const P& pred, const std::size_t room) {
+    constexpr std::uint32_t sentinel{0xdeadbeef};
+    std::vector<std::uint32_t> storage(room + sgl::soa::block_size, sentinel);
+    const std::size_t written{sgl::soa::match_indices(range, pred, std::span{storage.data(), room})};
+    EXPECT_LE(written, room);
+    for (std::size_t i{room}; i < storage.size(); ++i) {
+        EXPECT_EQ(storage[i], sentinel) << "wrote past the span, i=" << i;
+    }
+    storage.resize(written);
+    return storage;
+}
+
+std::vector<std::uint32_t> as_u32(const std::vector<std::size_t>& v) {
+    return {v.begin(), v.end()};
+}
+
+} // namespace
+
+TEST(Soa, MatchIndicesMatchesReference) {
+    const sgl::box3d everything{{-1.0f, -1.0f, -1.0f}, {11.0f, 11.0f, 11.0f}};
+    const sgl::box3d sliver{{0.0f, 0.0f, 0.0f}, {10.0f, 10.0f, 0.3f}};
+    for (const auto n : sizes) {
+        const auto c{random_cloud(n, 211u + static_cast<unsigned>(n))};
+
+        /* dense (every point), medium (~12%) and sparse (~3%): all three compaction paths */
+        for (const auto& q : {everything, query_box, sliver}) {
+            std::vector<std::size_t> expected;
+            for (std::size_t i{}; i < n; ++i) {
+                if (ref_inside(at(c.axis, i), q)) {
+                    expected.push_back(i);
+                }
+            }
+            for_each_layout(c, query_center, [&](const auto& pts, const std::string& layout) {
+                SCOPED_TRACE(layout + " n=" + std::to_string(n));
+                EXPECT_EQ(run_match_indices(pts, sgl::soa::inside(q), n), as_u32(expected));
+            });
+        }
+    }
+}
+
+TEST(Soa, MatchIndicesShortSpanGetsTheFirstMatches) {
+    const std::size_t n{1001};
+    const auto c{random_cloud(n, 99u)};
+    const sgl::box3d everything{{-1.0f, -1.0f, -1.0f}, {11.0f, 11.0f, 11.0f}};
+
+    for (const std::size_t room : {std::size_t{0}, std::size_t{1}, std::size_t{7}, std::size_t{64}, std::size_t{65}, std::size_t{500}, n - 1}) {
+        SCOPED_TRACE("room=" + std::to_string(room));
+        std::vector<std::uint32_t> expected(room);
+        for (std::size_t i{}; i < room; ++i) {
+            expected[i] = static_cast<std::uint32_t>(i);
+        }
+        EXPECT_EQ(run_match_indices(c.view(), sgl::soa::inside(everything), room), expected);
+    }
+
+    /* medium density: the first `room` of the true matches */
+    std::vector<std::uint32_t> all;
+    for (std::size_t i{}; i < n; ++i) {
+        if (ref_inside(at(c.axis, i), query_box)) {
+            all.push_back(static_cast<std::uint32_t>(i));
+        }
+    }
+    ASSERT_GT(all.size(), 20u);
+    const std::size_t room{all.size() / 2};
+    EXPECT_EQ(run_match_indices(c.view(), sgl::soa::inside(query_box), room),
+        std::vector<std::uint32_t>(all.begin(), all.begin() + static_cast<std::ptrdiff_t>(room)));
+}
+
+TEST(Soa, MatchIndicesOfRayHits) {
+    const auto b{random_boxes(1001, 5u)};
+    const std::array<float, 3> o{0.5f, 0.25f, 9.0f};
+    const std::array<float, 3> d{1.0f, 0.7f, -0.3f};
+    const auto ray{sgl::soa::hit_by(sgl::vec3{o[0], o[1], o[2]}, sgl::vec3{d[0], d[1], d[2]})};
+
+    std::vector<std::uint32_t> expected;
+    for (std::size_t i{}; i < b.size(); ++i) {
+        if (ref_ray(at(b.lo, i), at(b.hi, i), o, d, 0.0f, inf).hit) {
+            expected.push_back(static_cast<std::uint32_t>(i));
+        }
+    }
+    ASSERT_FALSE(expected.empty());
+    for_each_layout(b, huge_lo, huge_hi, [&](const auto& view, const std::string& layout) {
+        SCOPED_TRACE(layout);
+        EXPECT_EQ(run_match_indices(view, ray, b.size()), expected);
+    });
 }
 
 /* ------------------------------------------------------------
