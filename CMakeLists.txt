@@ -71,6 +71,7 @@ endif()
 # ---------------------------------------------------------------------------------------
 option(SGL_PIC   "Build with position-independent code" OFF)
 option(SGL_TESTS "Build sgl tests" OFF)
+option(SGL_BENCHMARKS "Build sgl benchmarks" OFF)
 option(SGL_INSTALL "Generate install + find_package() rules" "${PROJECT_IS_TOP_LEVEL}")
 
 # ---------------------------------------------------------------------------------------
@@ -176,6 +177,10 @@ target_sources(${PROJECT_NAME}
 if(PROJECT_IS_TOP_LEVEL AND SGL_TESTS)
     enable_testing() # at the top level so `ctest --test-dir build` is the CTest root
     add_subdirectory(tests)
+endif()
+
+if(PROJECT_IS_TOP_LEVEL AND SGL_BENCHMARKS)
+    add_subdirectory(bench)
 endif()
 
 # ---------------------------------------------------------------------------------------
