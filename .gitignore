@@ -29,5 +29,8 @@ compile_commands.json
 # Debug
 *.dSYM/
 
+# clangd
+.clangd
+
 # Personal notes, never shared
 *.local.md
