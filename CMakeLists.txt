@@ -154,6 +154,8 @@ endif()
 set(ModuleInterfaceFiles
     src/sgl/types.cppm
     src/sgl/scalar.cppm
+    src/sgl/batch.cppm
+    src/sgl/soa.cppm
     src/sgl/sgl.cppm
 )
 
