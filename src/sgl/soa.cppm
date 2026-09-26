@@ -217,10 +217,38 @@ template <class B, std::size_t D> struct ray_slabs {
     typename B::mask operator()(const std::size_t i) const noexcept { return entry(i).hit; }
 };
 
+/* The bit mask of the last, partial block starting at base (bits past the end are zero). A
+ * padded view runs it on whole native batches and masks the excess; an unpadded one
+ * finishes on the scalar backend. */
+template <class V, class P, class W> std::uint64_t tail_word(const V& view, const P& pred, const W& wide_pred, const std::size_t base) noexcept {
+    using T = typename V::value_type;
+    using wide = batch<T, native_isa>;
+    constexpr std::size_t lanes{wide::width};
+
+    const std::size_t rem{view.size - base};
+    std::uint64_t word{};
+    if constexpr (padded_for<V, wide>) {
+        for (std::size_t k{}; k < rem; k += lanes) {
+            word |= std::uint64_t{wide_pred(base + k).bits()} << k;
+        }
+        word &= (std::uint64_t{1} << rem) - 1;
+    } else {
+        using narrow = batch<T, scalar_isa>;
+        const auto narrow_pred{pred.template bind<narrow>(view)};
+        std::size_t k{};
+        for (; k + lanes <= rem; k += lanes) {
+            word |= std::uint64_t{wide_pred(base + k).bits()} << k;
+        }
+        for (; k < rem; ++k) {
+            word |= std::uint64_t{narrow_pred(base + k).bits()} << k;
+        }
+    }
+    return word;
+}
+
 /* Runs the predicate over the view in blocks of 64 and hands each block to on_word as a bit
  * mask (bit k = element 64 * word + k; bits past the end are zero). on_word returns false to
- * stop early. A padded view runs its last block on whole native batches and masks the
- * excess; an unpadded one finishes on the scalar backend. */
+ * stop early. */
 template <class V, class P, class F> void scan_words(const V& view, const P& pred, F&& on_word) noexcept {
     using T = typename V::value_type;
     using wide = batch<T, native_isa>;
@@ -229,28 +257,6 @@ template <class V, class P, class F> void scan_words(const V& view, const P& pre
 
     const auto wide_pred{pred.template bind<wide>(view)};
     const std::size_t n{view.size};
-
-    const auto tail_word{[&](const std::size_t base) noexcept {
-        const std::size_t rem{n - base};
-        std::uint64_t word{};
-        if constexpr (padded_for<V, wide>) {
-            for (std::size_t k{}; k < rem; k += lanes) {
-                word |= std::uint64_t{wide_pred(base + k).bits()} << k;
-            }
-            word &= (std::uint64_t{1} << rem) - 1;
-        } else {
-            using narrow = batch<T, scalar_isa>;
-            const auto narrow_pred{pred.template bind<narrow>(view)};
-            std::size_t k{};
-            for (; k + lanes <= rem; k += lanes) {
-                word |= std::uint64_t{wide_pred(base + k).bits()} << k;
-            }
-            for (; k < rem; ++k) {
-                word |= std::uint64_t{narrow_pred(base + k).bits()} << k;
-            }
-        }
-        return word;
-    }};
 
     std::size_t base{};
     for (; base + soa::block_size <= n; base += soa::block_size) {
@@ -263,7 +269,7 @@ template <class V, class P, class F> void scan_words(const V& view, const P& pre
         }
     }
     if (base < n) {
-        on_word(base / soa::block_size, tail_word(base));
+        on_word(base / soa::block_size, tail_word(view, pred, wide_pred, base));
     }
 }
 
@@ -711,42 +717,61 @@ template <class R, predicate_for<R> P, std::invocable<std::size_t> F> void for_e
  * native path stores whole vectors. Ranges are limited to 2^32 elements.
  */
 template <class R, predicate_for<R> P> std::size_t match_indices(const R& range, const P& pred, const std::span<std::uint32_t> out) noexcept {
+    using V = decltype(detail::as_view(range));
+    using wide = detail::batch<typename V::value_type, detail::native_isa>;
     using compactor = detail::index_compactor<detail::native_isa>;
-    constexpr std::size_t lanes{compactor::width};
-    constexpr std::uint64_t lane_bits{(std::uint64_t{1} << lanes) - 1};
+    static_assert(compactor::width == wide::width, "one compactor store per batch");
+    constexpr std::size_t lanes{wide::width};
+    constexpr std::size_t chunks{block_size / lanes};
     /* At or below this many matches in a block, walking the set bits beats storing every chunk. */
     constexpr int sparse_block{8};
 
-    const auto view{detail::as_view(range)};
+    const V view{detail::as_view(range)};
     assert(static_cast<std::uint64_t>(view.size) <= std::uint64_t{1} << 32);
+    const auto wide_pred{pred.template bind<wide>(view)};
     std::uint32_t* const dst{out.data()};
     const std::size_t room{out.size()};
-    std::size_t written{};
+    const std::size_t size{view.size};
+    std::size_t n{};
 
-    /* dst, room and the running count stay in registers: the compactor's memcpy store may
-     * alias anything, so anything reached through a reference is reloaded after each chunk. */
-    detail::scan_words(view, pred, [dst, room, &written](const std::size_t w, std::uint64_t bits) noexcept {
-        const auto base{static_cast<std::uint32_t>(w * block_size)};
-        std::size_t n{written};
+    /* The dense path feeds each batch's mask straight to the compactor. The 64-bit word is
+     * still built: one popcount for the decision and one bit walk for sparse blocks beat
+     * doing either per batch. */
+    std::size_t base{};
+    for (; base + block_size <= size; base += block_size) {
+        std::array<std::uint32_t, chunks> m{};
+        std::uint64_t word{};
+        for (std::size_t c{}; c < chunks; ++c) {
+            m[c] = wide_pred(base + c * lanes).bits();
+            word |= std::uint64_t{m[c]} << (c * lanes);
+        }
+        const auto first{static_cast<std::uint32_t>(base)};
         if (n + block_size > room) {
             /* Near the end of a short span: one match at a time, bounds checked. */
-            for (; bits && n < room; bits &= bits - 1) {
-                dst[n++] = base + static_cast<std::uint32_t>(std::countr_zero(bits));
+            for (; word && n < room; word &= word - 1) {
+                dst[n++] = first + static_cast<std::uint32_t>(std::countr_zero(word));
             }
-        } else if (std::popcount(bits) <= sparse_block) {
-            for (; bits; bits &= bits - 1) {
-                dst[n++] = base + static_cast<std::uint32_t>(std::countr_zero(bits));
+            if (n == room) {
+                return n;
+            }
+        } else if (std::popcount(word) <= sparse_block) {
+            for (; word; word &= word - 1) {
+                dst[n++] = first + static_cast<std::uint32_t>(std::countr_zero(word));
             }
         } else {
             /* Stores whole chunks, up to a block past the count: covered by the room check above. */
-            for (std::size_t k{}; k < block_size; k += lanes) {
-                n += compactor::store(dst + n, base + static_cast<std::uint32_t>(k), static_cast<std::uint32_t>((bits >> k) & lane_bits));
+            for (std::size_t c{}; c < chunks; ++c) {
+                n += compactor::store(dst + n, first + static_cast<std::uint32_t>(c * lanes), m[c]);
             }
         }
-        written = n;
-        return n < room;
-    });
-    return written;
+    }
+    if (base < size) {
+        const auto first{static_cast<std::uint32_t>(base)};
+        for (std::uint64_t bits{detail::tail_word(view, pred, wide_pred, base)}; bits && n < room; bits &= bits - 1) {
+            dst[n++] = first + static_cast<std::uint32_t>(std::countr_zero(bits));
+        }
+    }
+    return n;
 }
 
 /**

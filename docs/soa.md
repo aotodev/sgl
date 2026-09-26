@@ -122,15 +122,15 @@ Short ranges, points in box, count (the padded buffer has no scalar tail):
 | 1000 | 7.8 G / 10.0 G | 7.8 G / 10.0 G | 3.9 G / 6.6 G |
 
 Index compaction by match density, 4096 points in box (G points per second, Clang / GCC).
-`match_indices` walks the set bits of sparse blocks and stores whole vectors from a
-compile-time table of bit positions in dense ones:
+`match_indices` walks the set bits of sparse blocks and, in dense ones, compacts each SIMD
+batch's mask straight from a compile-time table of bit positions:
 
 | Density | `match_indices` | `for_each_match` into an array | branchless scalar (`out[w] = i; w += hit;`) |
 | --- | --- | --- | --- |
-| 1% | 7.5 / 8.9 | 7.9 / 9.3 | 4.1 / 0.6 |
-| 12% | 5.5 / 6.8 | 6.1 / 7.4 | 4.3 / 0.6 |
-| 50% | 4.0 / 5.7 | 2.6 / 3.1 | 4.2 / 0.6 |
-| 100% | 4.6 / 5.5 | 1.6 / 1.7 | 4.3 / 0.6 |
+| 1% | 9.5 / 8.7 | 8.1 / 9.6 | 4.4 / 0.6 |
+| 12% | 7.3 / 7.0 | 6.3 / 7.5 | 4.4 / 0.6 |
+| 50% | 6.6 / 6.3 | 2.9 / 3.1 | 4.3 / 0.6 |
+| 100% | 6.3 / 6.0 | 1.8 / 1.7 | 4.2 / 0.6 |
 
 Past the caches every query is bandwidth bound and the variants converge (about 2.5 to 2.9 G
 points per second at 4 Mi points). Reproduce with `-DSGL_BENCHMARKS=ON` and
