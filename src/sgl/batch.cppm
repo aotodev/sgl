@@ -55,7 +55,7 @@ template <> struct batch_mask<float, scalar_isa> {
     friend constexpr batch_mask operator&(const batch_mask a, const batch_mask b) noexcept { return {a.m && b.m}; }
     friend constexpr batch_mask operator|(const batch_mask a, const batch_mask b) noexcept { return {a.m || b.m}; }
     friend constexpr batch_mask operator~(const batch_mask a) noexcept { return {!a.m}; }
-    [[nodiscard]] constexpr std::uint32_t bits() const noexcept { return m ? 1u : 0u; }
+    constexpr std::uint32_t bits() const noexcept { return m ? 1u : 0u; }
 };
 
 template <> struct batch<float, scalar_isa> {
@@ -67,6 +67,8 @@ template <> struct batch<float, scalar_isa> {
 
     static constexpr batch load(const float* p) noexcept { return {*p}; }
     static constexpr batch broadcast(const float s) noexcept { return {s}; }
+    /* Lanes [0, k) set; k <= width. */
+    static constexpr mask first_lanes(const std::size_t k) noexcept { return {k > 0}; }
     constexpr void store(float* p) const noexcept { *p = v; }
 
     friend constexpr batch operator-(const batch a, const batch b) noexcept { return {a.v - b.v}; }
@@ -92,7 +94,7 @@ template <> struct batch_mask<float, avx2_isa> {
     friend inline batch_mask operator&(const batch_mask a, const batch_mask b) noexcept { return {_mm256_and_ps(a.m, b.m)}; }
     friend inline batch_mask operator|(const batch_mask a, const batch_mask b) noexcept { return {_mm256_or_ps(a.m, b.m)}; }
     friend inline batch_mask operator~(const batch_mask a) noexcept { return {_mm256_xor_ps(a.m, _mm256_castsi256_ps(_mm256_set1_epi32(-1)))}; }
-    [[nodiscard]] inline std::uint32_t bits() const noexcept { return static_cast<std::uint32_t>(_mm256_movemask_ps(m)); }
+    inline std::uint32_t bits() const noexcept { return static_cast<std::uint32_t>(_mm256_movemask_ps(m)); }
 };
 
 template <> struct batch<float, avx2_isa> {
@@ -110,6 +112,9 @@ template <> struct batch<float, avx2_isa> {
         return r;
     }
     static inline batch broadcast(const float s) noexcept { return {_mm256_set1_ps(s)}; }
+    static inline mask first_lanes(const std::size_t k) noexcept {
+        return {_mm256_cmp_ps(_mm256_setr_ps(0, 1, 2, 3, 4, 5, 6, 7), _mm256_set1_ps(static_cast<float>(k)), _CMP_LT_OQ)};
+    }
     inline void store(float* p) const noexcept { std::memcpy(p, &v, sizeof v); }
 
     friend inline batch operator-(const batch a, const batch b) noexcept { return {_mm256_sub_ps(a.v, b.v)}; }
@@ -146,7 +151,7 @@ template <> struct batch_mask<float, neon_isa> {
     friend inline batch_mask operator&(const batch_mask a, const batch_mask b) noexcept { return {vandq_u32(a.m, b.m)}; }
     friend inline batch_mask operator|(const batch_mask a, const batch_mask b) noexcept { return {vorrq_u32(a.m, b.m)}; }
     friend inline batch_mask operator~(const batch_mask a) noexcept { return {vmvnq_u32(a.m)}; }
-    [[nodiscard]] inline std::uint32_t bits() const noexcept {
+    inline std::uint32_t bits() const noexcept {
         const uint32x4_t weights = {1, 2, 4, 8};
         return vaddvq_u32(vandq_u32(m, weights));
     }
@@ -161,6 +166,10 @@ template <> struct batch<float, neon_isa> {
 
     static inline batch load(const float* p) noexcept { return {vld1q_f32(p)}; }
     static inline batch broadcast(const float s) noexcept { return {vdupq_n_f32(s)}; }
+    static inline mask first_lanes(const std::size_t k) noexcept {
+        const float32x4_t iota = {0, 1, 2, 3};
+        return {vcltq_f32(iota, vdupq_n_f32(static_cast<float>(k)))};
+    }
     inline void store(float* p) const noexcept { vst1q_f32(p, v); }
 
     friend inline batch operator-(const batch a, const batch b) noexcept { return {vsubq_f32(a.v, b.v)}; }

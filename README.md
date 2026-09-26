@@ -71,7 +71,8 @@ compiles unchanged against the other.
   inversion, and point/direction application.
 - **Batch queries over SoA data**: points in a box, boxes overlapping a box or
   containing a point, ray against many boxes, and bounds, as composable
-  predicates run 8 wide on AVX2 and 4 wide on NEON. See [docs/soa.md](docs/soa.md).
+  predicates run 8 wide on AVX2 and 4 wide on NEON, over your own arrays or
+  padded, pmr-backed buffers. See [docs/soa.md](docs/soa.md).
 - **Intersection & spatial queries**: 2D segment intersection, ray-AABB and
   segment-AABB tests, closest distance between two 3D segments (for
   capsule/clearance checks), point-in-polygon (winding number), segment-polygon,

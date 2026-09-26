@@ -21,16 +21,16 @@ constexpr float inf{std::numeric_limits<float>::infinity()};
 struct points_data {
     std::array<std::vector<float>, 3> axis;
     std::vector<sgl::vec3> aos;
-    [[nodiscard]] sgl::soa::points3f view() const { return sgl::soa::make_points(axis[0], axis[1], axis[2]); }
+    sgl::soa::point_buffer3f buf;
+    sgl::soa::points3f view() const { return sgl::soa::make_points(axis[0], axis[1], axis[2]); }
 };
 
 struct boxes_data {
     std::array<std::vector<float>, 3> lo;
     std::array<std::vector<float>, 3> hi;
     std::vector<sgl::box3d> aos;
-    [[nodiscard]] sgl::soa::boxes3f view() const {
-        return sgl::soa::make_boxes(sgl::soa::make_points(lo[0], lo[1], lo[2]), sgl::soa::make_points(hi[0], hi[1], hi[2]));
-    }
+    sgl::soa::box_buffer3f buf;
+    sgl::soa::boxes3f view() const { return sgl::soa::make_boxes(sgl::soa::make_points(lo[0], lo[1], lo[2]), sgl::soa::make_points(hi[0], hi[1], hi[2])); }
 };
 
 points_data make_points_data(const std::size_t n) {
@@ -46,6 +46,10 @@ points_data make_points_data(const std::size_t n) {
         d.axis[0][i] = d.aos[i].x;
         d.axis[1][i] = d.aos[i].y;
         d.axis[2][i] = d.aos[i].z;
+    }
+    d.buf.reserve(n);
+    for (const auto& p : d.aos) {
+        d.buf.push_back(p);
     }
     return d;
 }
@@ -70,6 +74,10 @@ boxes_data make_boxes_data(const std::size_t n) {
         d.hi[0][i] = hi.x;
         d.hi[1][i] = hi.y;
         d.hi[2][i] = hi.z;
+    }
+    d.buf.reserve(n);
+    for (const auto& b : d.aos) {
+        d.buf.push_back(b);
     }
     return d;
 }
@@ -97,6 +105,14 @@ void points_in_box_count_soa(benchmark::State& state) {
     const auto d{make_points_data(size_arg(state))};
     for (auto _ : state) {
         benchmark::DoNotOptimize(sgl::soa::count(d.view(), sgl::soa::inside(point_query)));
+    }
+    set_items(state);
+}
+
+void points_in_box_count_buffer(benchmark::State& state) {
+    const auto d{make_points_data(size_arg(state))};
+    for (auto _ : state) {
+        benchmark::DoNotOptimize(sgl::soa::count(d.buf, sgl::soa::inside(point_query)));
     }
     set_items(state);
 }
@@ -222,6 +238,14 @@ void boxes_overlap_count_soa(benchmark::State& state) {
     set_items(state);
 }
 
+void boxes_overlap_count_buffer(benchmark::State& state) {
+    const auto d{make_boxes_data(size_arg(state))};
+    for (auto _ : state) {
+        benchmark::DoNotOptimize(sgl::soa::count(d.buf, sgl::soa::overlaps(box_query)));
+    }
+    set_items(state);
+}
+
 void boxes_overlap_count_scalar(benchmark::State& state) {
     const auto d{make_boxes_data(size_arg(state))};
     const auto& q{box_query};
@@ -266,6 +290,24 @@ void ray_boxes_distances_soa(benchmark::State& state) {
     std::vector<float> t(d.aos.size());
     for (auto _ : state) {
         benchmark::DoNotOptimize(sgl::soa::hit_distances(d.view(), sgl::soa::hit_by(ray_origin, ray_dir), t));
+        benchmark::ClobberMemory();
+    }
+    set_items(state);
+}
+
+void ray_boxes_count_buffer(benchmark::State& state) {
+    const auto d{make_boxes_data(size_arg(state))};
+    for (auto _ : state) {
+        benchmark::DoNotOptimize(sgl::soa::count(d.buf, sgl::soa::hit_by(ray_origin, ray_dir)));
+    }
+    set_items(state);
+}
+
+void ray_boxes_distances_buffer(benchmark::State& state) {
+    const auto d{make_boxes_data(size_arg(state))};
+    std::vector<float> t(d.aos.size());
+    for (auto _ : state) {
+        benchmark::DoNotOptimize(sgl::soa::hit_distances(d.buf, sgl::soa::hit_by(ray_origin, ray_dir), t));
         benchmark::ClobberMemory();
     }
     set_items(state);
@@ -327,6 +369,14 @@ void bounds_soa(benchmark::State& state) {
     set_items(state);
 }
 
+void bounds_buffer(benchmark::State& state) {
+    const auto d{make_points_data(size_arg(state))};
+    for (auto _ : state) {
+        benchmark::DoNotOptimize(sgl::soa::bounds(d.buf));
+    }
+    set_items(state);
+}
+
 void bounds_scalar(benchmark::State& state) {
     const auto d{make_points_data(size_arg(state))};
     for (auto _ : state) {
@@ -363,8 +413,11 @@ void bounds_aos(benchmark::State& state) {
 
 /* 4 Ki fits L1/L2, 256 Ki spills to L3, 4 Mi is memory bound. */
 #define SGL_BENCH(fn) BENCHMARK(fn)->Arg(1 << 12)->Arg(1 << 18)->Arg(1 << 22)
+/* Short ranges (leaf buckets, grid cells), where the tail is a large share of the work. */
+#define SGL_BENCH_SHORT(fn) BENCHMARK(fn)->Name(#fn "_short")->Arg(13)->Arg(100)->Arg(1000)
 
 SGL_BENCH(points_in_box_count_soa);
+SGL_BENCH(points_in_box_count_buffer);
 SGL_BENCH(points_in_box_count_scalar);
 SGL_BENCH(points_in_box_count_scalar_branchless);
 SGL_BENCH(points_in_box_count_aos);
@@ -373,12 +426,26 @@ SGL_BENCH(points_in_box_mask_scalar);
 SGL_BENCH(points_in_box_minus_hole_soa);
 SGL_BENCH(points_in_box_minus_hole_scalar);
 SGL_BENCH(boxes_overlap_count_soa);
+SGL_BENCH(boxes_overlap_count_buffer);
 SGL_BENCH(boxes_overlap_count_scalar);
 SGL_BENCH(boxes_overlap_count_aos);
 SGL_BENCH(ray_boxes_count_soa);
+SGL_BENCH(ray_boxes_count_buffer);
 SGL_BENCH(ray_boxes_distances_soa);
+SGL_BENCH(ray_boxes_distances_buffer);
 SGL_BENCH(ray_boxes_distances_scalar);
 SGL_BENCH(ray_boxes_distances_aos);
 SGL_BENCH(bounds_soa);
+SGL_BENCH(bounds_buffer);
 SGL_BENCH(bounds_scalar);
 SGL_BENCH(bounds_aos);
+
+SGL_BENCH_SHORT(points_in_box_count_soa);
+SGL_BENCH_SHORT(points_in_box_count_buffer);
+SGL_BENCH_SHORT(points_in_box_count_scalar_branchless);
+SGL_BENCH_SHORT(ray_boxes_distances_soa);
+SGL_BENCH_SHORT(ray_boxes_distances_buffer);
+SGL_BENCH_SHORT(ray_boxes_distances_scalar);
+SGL_BENCH_SHORT(bounds_soa);
+SGL_BENCH_SHORT(bounds_buffer);
+SGL_BENCH_SHORT(bounds_scalar);
