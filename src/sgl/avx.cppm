@@ -10,6 +10,7 @@ module;
 #include <cassert>
 #include <cmath>
 #include <cstdint>
+#include <cstring>
 #include <limits>
 #include <type_traits>
 
@@ -18,7 +19,7 @@ export module sgl:simd;
 import :types;
 import :scalar;
 
-export namespace sgl {
+namespace sgl::detail {
 
 /* Load vec2 into lower 2 lanes of __m128, upper lanes zeroed.
  *
@@ -31,8 +32,10 @@ inline __m128 load(const vec2& v) noexcept {
     return _mm_castsi128_ps(_mm_loadl_epi64(reinterpret_cast<const __m128i*>(&v.x)));
 }
 
+/* memcpy rather than _mm_storel_epi64, which is a punned 8-byte store: the static analyzer
+ * binds it to x alone and reports y as uninitialised. Same codegen at every level. */
 inline void store(const __m128 vals, vec2& dst) noexcept {
-    _mm_storel_epi64(reinterpret_cast<__m128i*>(&dst.x), _mm_castps_si128(vals));
+    std::memcpy(&dst.x, &vals, sizeof dst);
 }
 
 inline __m128 load(const vec3& v) noexcept {
@@ -243,14 +246,19 @@ inline sub_dets compute_sub_dets(const mat4& m) noexcept {
     };
 }
 
-} // namespace sgl
+/* Loads the full mat2 as a single __m128: {col0.x, col0.y, col1.x, col1.y} = {a, c, b, d}. */
+inline __m128 load(const mat2& m) noexcept {
+    return _mm_load_ps(&m.cols[0].x);
+}
+
+} // namespace sgl::detail
 
 export namespace sgl {
 
 /* non-constexpr but simd and branchless */
 template <vector Vec> bool nearly_equal(const Vec& lhs, const Vec& rhs, const float abs_tol = fp32_abs_tol, const float rel_tol = fp32_rel_tol) noexcept {
-    const __m128 a = load(lhs);
-    const __m128 b = load(rhs);
+    const __m128 a = detail::load(lhs);
+    const __m128 b = detail::load(rhs);
 
     /* abs(a-b) */
     const __m128 sign_mask = _mm_set1_ps(-0.0f);
@@ -270,124 +278,124 @@ template <vector Vec> bool nearly_equal(const Vec& lhs, const Vec& rhs, const fl
 
     const __m128 ok = _mm_or_ps(exact, _mm_or_ps(abs_ok, rel_ok));
 
-    constexpr auto mask{lane_mask<Vec>()};
+    constexpr auto mask{detail::lane_mask<Vec>()};
     return (_mm_movemask_ps(ok) & mask) == mask;
 }
 
 template <vector Vec> bool nearly_zero(const Vec& val, const float tol = fp32_abs_tol) noexcept {
     const __m128 sign_mask = _mm_set1_ps(-0.0f);
-    const __m128 abs_val = _mm_andnot_ps(sign_mask, load(val));
+    const __m128 abs_val = _mm_andnot_ps(sign_mask, detail::load(val));
     const __m128 ok = _mm_cmplt_ps(abs_val, _mm_set1_ps(tol));
 
-    constexpr auto mask{lane_mask<Vec>()};
+    constexpr auto mask{detail::lane_mask<Vec>()};
     return (_mm_movemask_ps(ok) & mask) == mask;
 }
 
 template <vector Vec> bool any_nearly_zero(const Vec& val, const float tol = fp32_abs_tol) noexcept {
     const __m128 sign_mask = _mm_set1_ps(-0.0f);
-    const __m128 abs_val = _mm_andnot_ps(sign_mask, load(val));
+    const __m128 abs_val = _mm_andnot_ps(sign_mask, detail::load(val));
     const __m128 ok = _mm_cmplt_ps(abs_val, _mm_set1_ps(tol));
 
-    constexpr auto mask{lane_mask<Vec>()};
+    constexpr auto mask{detail::lane_mask<Vec>()};
     return static_cast<bool>(_mm_movemask_ps(ok) & mask);
 }
 
 /* unary - operator */
 template <vector Vec> Vec operator-(const Vec& v) noexcept {
     Vec out{};
-    store(_mm_xor_ps(load(v), _mm_set1_ps(-0.0f)), out);
+    detail::store(_mm_xor_ps(detail::load(v), _mm_set1_ps(-0.0f)), out);
     return out;
 }
 
 template <vector Vec> Vec operator+(const Vec& lhs, const Vec& rhs) noexcept {
     Vec out{};
-    store(_mm_add_ps(load(lhs), load(rhs)), out);
+    detail::store(_mm_add_ps(detail::load(lhs), detail::load(rhs)), out);
     return out;
 }
 
 template <vector Vec> Vec operator-(const Vec& lhs, const Vec& rhs) noexcept {
     Vec out{};
-    store(_mm_sub_ps(load(lhs), load(rhs)), out);
+    detail::store(_mm_sub_ps(detail::load(lhs), detail::load(rhs)), out);
     return out;
 }
 
 template <vector Vec> Vec operator*(const Vec& lhs, const Vec& rhs) noexcept {
     Vec out{};
-    store(_mm_mul_ps(load(lhs), load(rhs)), out);
+    detail::store(_mm_mul_ps(detail::load(lhs), detail::load(rhs)), out);
     return out;
 }
 
 template <vector Vec> Vec operator/(const Vec& lhs, const Vec& rhs) noexcept {
     assert(!any_nearly_zero(rhs));
     Vec out{};
-    store(_mm_div_ps(load(lhs), safe_divisor<Vec>(load(rhs))), out);
+    detail::store(_mm_div_ps(detail::load(lhs), detail::safe_divisor<Vec>(detail::load(rhs))), out);
     return out;
 }
 
 template <vector Vec> Vec& operator+=(Vec& lhs, const Vec& rhs) noexcept {
-    store(_mm_add_ps(load(lhs), load(rhs)), lhs);
+    detail::store(_mm_add_ps(detail::load(lhs), detail::load(rhs)), lhs);
     return lhs;
 }
 
 template <vector Vec> Vec& operator-=(Vec& lhs, const Vec& rhs) noexcept {
-    store(_mm_sub_ps(load(lhs), load(rhs)), lhs);
+    detail::store(_mm_sub_ps(detail::load(lhs), detail::load(rhs)), lhs);
     return lhs;
 }
 
 template <vector Vec> Vec& operator*=(Vec& lhs, const Vec& rhs) noexcept {
-    store(_mm_mul_ps(load(lhs), load(rhs)), lhs);
+    detail::store(_mm_mul_ps(detail::load(lhs), detail::load(rhs)), lhs);
     return lhs;
 }
 
 template <vector Vec> Vec& operator/=(Vec& lhs, const Vec& rhs) noexcept {
     assert(!any_nearly_zero(rhs));
-    store(_mm_div_ps(load(lhs), safe_divisor<Vec>(load(rhs))), lhs);
+    detail::store(_mm_div_ps(detail::load(lhs), detail::safe_divisor<Vec>(detail::load(rhs))), lhs);
     return lhs;
 }
 
 template <vector Vec> Vec operator+(const Vec& lhs, const float scalar) noexcept {
     Vec out{};
-    store(_mm_add_ps(load(lhs), _mm_set1_ps(scalar)), out);
+    detail::store(_mm_add_ps(detail::load(lhs), _mm_set1_ps(scalar)), out);
     return out;
 }
 
 template <vector Vec> Vec operator-(const Vec& lhs, const float scalar) noexcept {
     Vec out{};
-    store(_mm_sub_ps(load(lhs), _mm_set1_ps(scalar)), out);
+    detail::store(_mm_sub_ps(detail::load(lhs), _mm_set1_ps(scalar)), out);
     return out;
 }
 
 template <vector Vec> Vec operator*(const Vec& lhs, const float scalar) noexcept {
     Vec out{};
-    store(_mm_mul_ps(load(lhs), _mm_set1_ps(scalar)), out);
+    detail::store(_mm_mul_ps(detail::load(lhs), _mm_set1_ps(scalar)), out);
     return out;
 }
 
 template <vector Vec> Vec operator/(const Vec& lhs, const float scalar) noexcept {
     assert(!nearly_zero(scalar));
     Vec out{};
-    store(_mm_div_ps(load(lhs), _mm_set1_ps(scalar)), out);
+    detail::store(_mm_div_ps(detail::load(lhs), _mm_set1_ps(scalar)), out);
     return out;
 }
 
 template <vector Vec> Vec& operator+=(Vec& lhs, const float scalar) noexcept {
-    store(_mm_add_ps(load(lhs), _mm_set1_ps(scalar)), lhs);
+    detail::store(_mm_add_ps(detail::load(lhs), _mm_set1_ps(scalar)), lhs);
     return lhs;
 }
 
 template <vector Vec> Vec& operator-=(Vec& lhs, const float scalar) noexcept {
-    store(_mm_sub_ps(load(lhs), _mm_set1_ps(scalar)), lhs);
+    detail::store(_mm_sub_ps(detail::load(lhs), _mm_set1_ps(scalar)), lhs);
     return lhs;
 }
 
 template <vector Vec> Vec& operator*=(Vec& lhs, const float scalar) noexcept {
-    store(_mm_mul_ps(load(lhs), _mm_set1_ps(scalar)), lhs);
+    detail::store(_mm_mul_ps(detail::load(lhs), _mm_set1_ps(scalar)), lhs);
     return lhs;
 }
 
 template <vector Vec> Vec& operator/=(Vec& lhs, const float scalar) noexcept {
     assert(!nearly_zero(scalar));
-    store(_mm_div_ps(load(lhs), _mm_set1_ps(scalar)), lhs);
+    detail::store(_mm_div_ps(detail::load(lhs), _mm_set1_ps(scalar)), lhs);
     return lhs;
 }
 
@@ -403,19 +411,19 @@ template <vector Vec> Vec operator*(const float scalar, const Vec& rhs) noexcept
 /* non-commutative */
 template <vector Vec> Vec operator-(const float scalar, const Vec& rhs) noexcept {
     Vec out{};
-    store(_mm_sub_ps(_mm_set1_ps(scalar), load(rhs)), out);
+    detail::store(_mm_sub_ps(_mm_set1_ps(scalar), detail::load(rhs)), out);
     return out;
 }
 
 template <vector Vec> Vec operator/(const float scalar, const Vec& rhs) noexcept {
     assert(!any_nearly_zero(rhs));
     Vec out{};
-    store(_mm_div_ps(_mm_set1_ps(scalar), safe_divisor<Vec>(load(rhs))), out);
+    detail::store(_mm_div_ps(_mm_set1_ps(scalar), detail::safe_divisor<Vec>(detail::load(rhs))), out);
     return out;
 }
 
 template <vector Vec> float dot(const Vec& a, const Vec& b) noexcept {
-    return _mm_cvtss_f32(_mm_dp_ps(load(a), load(b), dp_scalar_mask<Vec>()));
+    return _mm_cvtss_f32(_mm_dp_ps(detail::load(a), detail::load(b), detail::dp_scalar_mask<Vec>()));
 }
 
 template <vector Vec> float length_squared(const Vec& v) noexcept {
@@ -423,177 +431,178 @@ template <vector Vec> float length_squared(const Vec& v) noexcept {
 }
 
 template <vector Vec> float length(const Vec& v) noexcept {
-    return _mm_cvtss_f32(_mm_sqrt_ss(_mm_dp_ps(load(v), load(v), dp_scalar_mask<Vec>())));
+    return _mm_cvtss_f32(_mm_sqrt_ss(_mm_dp_ps(detail::load(v), detail::load(v), detail::dp_scalar_mask<Vec>())));
 }
 
-/* Fast in-place normalize. _mm_rsqrt_ps gives ~12 bits (~3.5 decimal digits): fine for directions, not for physics. */
+/* Fast in-place normalize. _mm_rsqrt_ps gives ~12 bits (~3.5 decimal digits): fine for directions, not for physics.
+ * Its result differs between Intel and AMD, so the _fast and _nr variants are not reproducible across machines. */
 template <vector Vec> void normalize_fast(Vec& vec) noexcept {
-    const __m128 v = load(vec);
-    const __m128 inv_len = _mm_rsqrt_ps(_mm_dp_ps(v, v, dp_broadcast_mask<Vec>()));
-    store(_mm_mul_ps(v, inv_len), vec);
+    const __m128 v = detail::load(vec);
+    const __m128 inv_len = _mm_rsqrt_ps(_mm_dp_ps(v, v, detail::dp_broadcast_mask<Vec>()));
+    detail::store(_mm_mul_ps(v, inv_len), vec);
 }
 
 /* Precise in-place normalize using full sqrt. Slower than normalize_fast but accurate to full float precision. */
 template <vector Vec> void normalize(Vec& vec) noexcept {
     assert(!nearly_zero(vec) && "normalizing zero-length vector");
-    const __m128 v = load(vec);
-    const __m128 len = _mm_sqrt_ps(_mm_dp_ps(v, v, dp_broadcast_mask<Vec>()));
-    store(_mm_div_ps(v, len), vec);
+    const __m128 v = detail::load(vec);
+    const __m128 len = _mm_sqrt_ps(_mm_dp_ps(v, v, detail::dp_broadcast_mask<Vec>()));
+    detail::store(_mm_div_ps(v, len), vec);
 }
 
 template <vector Vec> void normalize_nr(Vec& vec) noexcept {
     assert(!nearly_zero(vec) && "normalizing zero-length vector");
-    const __m128 v = load(vec);
-    const __m128 dot = _mm_dp_ps(v, v, dp_broadcast_mask<Vec>());
-    const __m128 inv_len = rsqrt_nr(dot);
-    store(_mm_mul_ps(v, inv_len), vec);
+    const __m128 v = detail::load(vec);
+    const __m128 dot = _mm_dp_ps(v, v, detail::dp_broadcast_mask<Vec>());
+    const __m128 inv_len = detail::rsqrt_nr(dot);
+    detail::store(_mm_mul_ps(v, inv_len), vec);
 }
 
 template <vector Vec> Vec normalized_fast(const Vec& vec) noexcept {
     assert(!nearly_zero(vec) && "normalizing zero-length vector");
     Vec result{};
-    const __m128 v = load(vec);
-    const __m128 inv_len = _mm_rsqrt_ps(_mm_dp_ps(v, v, dp_broadcast_mask<Vec>()));
-    store(_mm_mul_ps(v, inv_len), result);
+    const __m128 v = detail::load(vec);
+    const __m128 inv_len = _mm_rsqrt_ps(_mm_dp_ps(v, v, detail::dp_broadcast_mask<Vec>()));
+    detail::store(_mm_mul_ps(v, inv_len), result);
     return result;
 }
 
 template <vector Vec> Vec normalized_nr(const Vec& vec) noexcept {
     assert(!nearly_zero(vec) && "normalizing zero-length vector");
     Vec result{};
-    const __m128 v = load(vec);
-    const __m128 dot = _mm_dp_ps(v, v, dp_broadcast_mask<Vec>());
-    const __m128 inv_len = rsqrt_nr(dot);
-    store(_mm_mul_ps(v, inv_len), result);
+    const __m128 v = detail::load(vec);
+    const __m128 dot = _mm_dp_ps(v, v, detail::dp_broadcast_mask<Vec>());
+    const __m128 inv_len = detail::rsqrt_nr(dot);
+    detail::store(_mm_mul_ps(v, inv_len), result);
     return result;
 }
 
 template <vector Vec> Vec normalized(const Vec& vec) noexcept {
     assert(!nearly_zero(vec) && "normalizing zero-length vector");
     Vec result{};
-    const __m128 v = load(vec);
-    const __m128 len = _mm_sqrt_ps(_mm_dp_ps(v, v, dp_broadcast_mask<Vec>()));
-    store(_mm_div_ps(v, len), result);
+    const __m128 v = detail::load(vec);
+    const __m128 len = _mm_sqrt_ps(_mm_dp_ps(v, v, detail::dp_broadcast_mask<Vec>()));
+    detail::store(_mm_div_ps(v, len), result);
     return result;
 }
 
 /* branchless, _mm_blendv_ps selects per-lane based on the sign bit of the mask. */
 template <vector Vec> void normalize_safe(Vec& vec) noexcept {
-    const __m128 v = load(vec);
-    const __m128 dot = _mm_dp_ps(v, v, dp_broadcast_mask<Vec>());
+    const __m128 v = detail::load(vec);
+    const __m128 dot = _mm_dp_ps(v, v, detail::dp_broadcast_mask<Vec>());
 
     /* If dot near 0, return zero vector instead of inf/NaN */
     const __m128 zero = _mm_setzero_ps();
     const __m128 is_zero = _mm_cmple_ps(dot, _mm_set1_ps(fp32_abs_tol * fp32_abs_tol));
 
-    const __m128 inv_len = rsqrt_nr(dot);
-    const __m128 result = _mm_mul_ps(v, inv_len);
+    /* Exact rather than rsqrt: this is the variant other functions build on, so it must be reproducible. */
+    const __m128 result = _mm_div_ps(v, _mm_sqrt_ps(dot));
 
     /* blend: zero where is_zero is true, result otherwise */
-    store(_mm_blendv_ps(result, zero, is_zero), vec);
+    detail::store(_mm_blendv_ps(result, zero, is_zero), vec);
 }
 
 template <vector Vec> Vec normalized_safe(const Vec& vec) noexcept {
-    const __m128 v = load(vec);
-    const __m128 dot = _mm_dp_ps(v, v, dp_broadcast_mask<Vec>());
+    const __m128 v = detail::load(vec);
+    const __m128 dot = _mm_dp_ps(v, v, detail::dp_broadcast_mask<Vec>());
 
     /* If dot near 0, return zero vector instead of inf/NaN */
     const __m128 zero = _mm_setzero_ps();
     const __m128 is_zero = _mm_cmple_ps(dot, _mm_set1_ps(fp32_abs_tol * fp32_abs_tol));
 
-    const __m128 inv_len = rsqrt_nr(dot);
-    const __m128 result = _mm_mul_ps(v, inv_len);
+    /* Exact rather than rsqrt: this is the variant other functions build on, so it must be reproducible. */
+    const __m128 result = _mm_div_ps(v, _mm_sqrt_ps(dot));
 
     /* blend: zero where is_zero is true, result otherwise */
     Vec out{};
-    store(_mm_blendv_ps(result, zero, is_zero), out);
+    detail::store(_mm_blendv_ps(result, zero, is_zero), out);
     return out;
 }
 
 /* Project v onto `onto` (assumes `onto` is already normalised). */
 template <vector Vec> Vec project(const Vec& v, const Vec& onto) noexcept {
-    const __m128 vv{load(v)};
-    const __m128 nn{load(onto)};
+    const __m128 vv{detail::load(v)};
+    const __m128 nn{detail::load(onto)};
 
-    const __m128 d{_mm_dp_ps(vv, nn, dp_broadcast_mask<Vec>())};
+    const __m128 d{_mm_dp_ps(vv, nn, detail::dp_broadcast_mask<Vec>())};
     Vec out{};
-    store(_mm_mul_ps(d, nn), out);
+    detail::store(_mm_mul_ps(d, nn), out);
     return out;
 }
 
 /* Reflect v about normal (assumes normal is unit length): v - 2 * dot(v, n) * n. */
 template <vector Vec> Vec reflect(const Vec& v, const Vec& normal) noexcept {
-    const __m128 vv{load(v)};
-    const __m128 nn{load(normal)};
+    const __m128 vv{detail::load(v)};
+    const __m128 nn{detail::load(normal)};
 
-    const __m128 d{_mm_dp_ps(vv, nn, dp_broadcast_mask<Vec>())};
+    const __m128 d{_mm_dp_ps(vv, nn, detail::dp_broadcast_mask<Vec>())};
     /* d + d = 2 * dot; avoids loading an extra 2.0f constant */
     const __m128 two_d_n{_mm_mul_ps(_mm_add_ps(d, d), nn)};
     Vec out{};
-    store(_mm_sub_ps(vv, two_d_n), out);
+    detail::store(_mm_sub_ps(vv, two_d_n), out);
     return out;
 }
 
 template <vector Vec> Vec min(const Vec& a, const Vec& b) noexcept {
     Vec out{};
-    store(_mm_min_ps(load(a), load(b)), out);
+    detail::store(_mm_min_ps(detail::load(a), detail::load(b)), out);
     return out;
 }
 
 template <vector Vec> Vec max(const Vec& a, const Vec& b) noexcept {
     Vec out{};
-    store(_mm_max_ps(load(a), load(b)), out);
+    detail::store(_mm_max_ps(detail::load(a), detail::load(b)), out);
     return out;
 }
 
 template <vector Vec> Vec abs(const Vec& v) noexcept {
     Vec out{};
-    store(_mm_andnot_ps(_mm_set1_ps(-0.0f), load(v)), out);
+    detail::store(_mm_andnot_ps(_mm_set1_ps(-0.0f), detail::load(v)), out);
     return out;
 }
 
 template <vector Vec> Vec clamp(const Vec& v, const Vec& lo, const Vec& hi) noexcept {
     Vec out{};
-    store(_mm_min_ps(_mm_max_ps(load(v), load(lo)), load(hi)), out);
+    detail::store(_mm_min_ps(_mm_max_ps(detail::load(v), detail::load(lo)), detail::load(hi)), out);
     return out;
 }
 
 template <vector Vec> Vec clamp(const Vec& v, const float lo, const float hi) noexcept {
     Vec out{};
-    store(_mm_min_ps(_mm_max_ps(load(v), _mm_set1_ps(lo)), _mm_set1_ps(hi)), out);
+    detail::store(_mm_min_ps(_mm_max_ps(detail::load(v), _mm_set1_ps(lo)), _mm_set1_ps(hi)), out);
     return out;
 }
 
 template <vector Vec> Vec lerp(const Vec& a, const Vec& b, const float t) noexcept {
-    const __m128 va = load(a);
+    const __m128 va = detail::load(a);
     Vec out{};
-    store(_mm_fmadd_ps(_mm_set1_ps(t), _mm_sub_ps(load(b), va), va), out);
+    detail::store(_mm_fmadd_ps(_mm_set1_ps(t), _mm_sub_ps(detail::load(b), va), va), out);
     return out;
 }
 
 template <vector Vec> float distance_squared(const Vec& a, const Vec& b) noexcept {
-    const __m128 d = _mm_sub_ps(load(a), load(b));
-    return _mm_cvtss_f32(_mm_dp_ps(d, d, dp_scalar_mask<Vec>()));
+    const __m128 d = _mm_sub_ps(detail::load(a), detail::load(b));
+    return _mm_cvtss_f32(_mm_dp_ps(d, d, detail::dp_scalar_mask<Vec>()));
 }
 
 template <vector Vec> float distance(const Vec& a, const Vec& b) noexcept {
-    const auto d = _mm_sub_ps(load(a), load(b));
-    return _mm_cvtss_f32(_mm_sqrt_ss(_mm_dp_ps(d, d, dp_scalar_mask<Vec>())));
+    const auto d = _mm_sub_ps(detail::load(a), detail::load(b));
+    return _mm_cvtss_f32(_mm_sqrt_ss(_mm_dp_ps(d, d, detail::dp_scalar_mask<Vec>())));
 }
 
 template <vector Vec> bool is_perpendicular(const Vec& a, const Vec& b, float tol = fp32_abs_tol) noexcept {
     /* Two vectors are perpendicular when their dot product is ~0 */
-    const auto d{_mm_cvtss_f32(_mm_dp_ps(load(a), load(b), dp_scalar_mask<Vec>()))};
+    const auto d{_mm_cvtss_f32(_mm_dp_ps(detail::load(a), detail::load(b), detail::dp_scalar_mask<Vec>()))};
     return std::abs(d) <= tol;
 }
 
 template <vector Vec> bool is_parallel(const Vec& a, const Vec& b, float tol = fp32_rel_tol) noexcept {
-    constexpr auto mask{dp_scalar_mask<Vec>()};
+    constexpr auto mask{detail::dp_scalar_mask<Vec>()};
 
     /* Cauchy-Schwarz equality
      * dot(a,b)^2 ~= dot(a,a) * dot(b,b) */
-    const auto va = load(a);
-    const auto vb = load(b);
+    const auto va = detail::load(a);
+    const auto vb = detail::load(b);
 
     const auto ab{_mm_cvtss_f32(_mm_dp_ps(va, vb, mask))};
     const auto aa{_mm_cvtss_f32(_mm_dp_ps(va, va, mask))};
@@ -603,18 +612,18 @@ template <vector Vec> bool is_parallel(const Vec& a, const Vec& b, float tol = f
 }
 
 template <vector Vec> bool all_greater_than(const Vec& a, const Vec& b) noexcept {
-    constexpr auto mask{lane_mask<Vec>()};
-    return (_mm_movemask_ps(_mm_cmpgt_ps(load(a), load(b))) & mask) == mask;
+    constexpr auto mask{detail::lane_mask<Vec>()};
+    return (_mm_movemask_ps(_mm_cmpgt_ps(detail::load(a), detail::load(b))) & mask) == mask;
 }
 
 template <vector Vec> bool all_less_than(const Vec& a, const Vec& b) noexcept {
-    constexpr auto mask{lane_mask<Vec>()};
-    return (_mm_movemask_ps(_mm_cmplt_ps(load(a), load(b))) & mask) == mask;
+    constexpr auto mask{detail::lane_mask<Vec>()};
+    return (_mm_movemask_ps(_mm_cmplt_ps(detail::load(a), detail::load(b))) & mask) == mask;
 }
 
 template <vector Vec> bool any_greater_than(const Vec& a, const Vec& b) noexcept {
-    constexpr auto mask{lane_mask<Vec>()};
-    return static_cast<bool>(_mm_movemask_ps(_mm_cmpgt_ps(load(a), load(b))) & mask);
+    constexpr auto mask{detail::lane_mask<Vec>()};
+    return static_cast<bool>(_mm_movemask_ps(_mm_cmpgt_ps(detail::load(a), detail::load(b))) & mask);
 }
 
 /* AABB containment: point inside box */
@@ -624,8 +633,8 @@ inline bool contains(const box3d& box, const vec3& point) {
 
 /* vec2: returns scalar (the z-component of the implied 3D cross) */
 inline float cross(const vec2& a, const vec2& b) noexcept {
-    const __m128 va = load(a);
-    const __m128 vb = load(b);
+    const __m128 va = detail::load(a);
+    const __m128 vb = detail::load(b);
 
     /* shuffle b to {b.y, b.x, ...} */
     const __m128 b_yx = _mm_shuffle_ps(vb, vb, _MM_SHUFFLE(3, 2, 0, 1));
@@ -639,8 +648,8 @@ inline float cross(const vec2& a, const vec2& b) noexcept {
 
 /* vec3, returns vec3 */
 inline vec3 cross(const vec3& a, const vec3& b) noexcept {
-    const __m128 va = load(a);
-    const __m128 vb = load(b);
+    const __m128 va = detail::load(a);
+    const __m128 vb = detail::load(b);
 
     /* result = {a.y*b.z - a.z*b.y, a.z*b.x - a.x*b.z, a.x*b.y - a.y*b.x} */
     const __m128 a_yzx = _mm_shuffle_ps(va, va, _MM_SHUFFLE(3, 0, 2, 1));
@@ -649,7 +658,7 @@ inline vec3 cross(const vec3& a, const vec3& b) noexcept {
 
     /* result is in zxy order, shuffle back to xyz */
     vec3 out{};
-    store(_mm_shuffle_ps(result, result, _MM_SHUFFLE(3, 0, 2, 1)), out);
+    detail::store(_mm_shuffle_ps(result, result, _MM_SHUFFLE(3, 0, 2, 1)), out);
     return out;
 }
 
@@ -664,10 +673,10 @@ template <> inline bool is_parallel<vec3>(const vec3& a, const vec3& b, float to
 
 /* vec2: {-y, x}, a 90 degree counter-clockwise rotation */
 inline vec2 perpendicular(const vec2& v) noexcept {
-    const __m128 shuffled = _mm_shuffle_ps(load(v), load(v), _MM_SHUFFLE(3, 2, 0, 1));
+    const __m128 shuffled = _mm_shuffle_ps(detail::load(v), detail::load(v), _MM_SHUFFLE(3, 2, 0, 1));
     /* Negate lane 0 only: XOR sign bit */
     vec2 out{};
-    store(_mm_xor_ps(shuffled, _mm_set_ss(-0.0f)), out);
+    detail::store(_mm_xor_ps(shuffled, _mm_set_ss(-0.0f)), out);
     return out;
 }
 
@@ -675,7 +684,7 @@ inline vec2 perpendicular(const vec2& v) noexcept {
 inline vec3 perpendicular(const vec3& v) noexcept {
     /*  Pick the axis least aligned with v, cross with it */
     const __m128 abs_mask = _mm_set1_ps(-0.0f);
-    const __m128 av = _mm_andnot_ps(abs_mask, load(v));
+    const __m128 av = _mm_andnot_ps(abs_mask, detail::load(v));
 
     /* extract components to find the smallest */
     const auto ax{_mm_cvtss_f32(av)};
@@ -696,13 +705,13 @@ inline vec3 perpendicular(const vec3& v) noexcept {
 }
 
 template <vector Vec> float angle_between(const Vec& a, const Vec& b) noexcept {
-    const auto va = load(a);
-    const auto vb = load(b);
+    const auto va = detail::load(a);
+    const auto vb = detail::load(b);
 
     /* cos(theta) = dot(a,b) / sqrt(dot(a,a) * dot(b,b)) */
-    const auto ab = _mm_dp_ps(va, vb, dp_scalar_mask<Vec>());
-    const auto aa = _mm_dp_ps(va, va, dp_scalar_mask<Vec>());
-    const auto bb = _mm_dp_ps(vb, vb, dp_scalar_mask<Vec>());
+    const auto ab = _mm_dp_ps(va, vb, detail::dp_scalar_mask<Vec>());
+    const auto aa = _mm_dp_ps(va, va, detail::dp_scalar_mask<Vec>());
+    const auto bb = _mm_dp_ps(vb, vb, detail::dp_scalar_mask<Vec>());
 
     const auto cos_theta = _mm_div_ss(ab, _mm_sqrt_ss(_mm_mul_ss(aa, bb)));
 
@@ -714,77 +723,77 @@ template <vector Vec> float angle_between(const Vec& a, const Vec& b) noexcept {
 
 template <box_type Box> bool is_valid(const Box& b) noexcept {
     __m128 lo, hi;
-    load_min_max(b, lo, hi);
-    constexpr std::int32_t mask = box_traits<Box>::lane_mask;
+    detail::load_min_max(b, lo, hi);
+    constexpr std::int32_t mask = detail::box_traits<Box>::lane_mask;
     return (_mm_movemask_ps(_mm_cmple_ps(lo, hi)) & mask) == mask;
 }
 
-template <box_type Box> box_vec_t<Box> center(const Box& b) noexcept {
+template <box_type Box> detail::box_vec_t<Box> center(const Box& b) noexcept {
     __m128 lo, hi;
-    load_min_max(b, lo, hi);
-    box_vec_t<Box> out{};
-    store(_mm_mul_ps(_mm_add_ps(lo, hi), _mm_set1_ps(0.5f)), out);
+    detail::load_min_max(b, lo, hi);
+    detail::box_vec_t<Box> out{};
+    detail::store(_mm_mul_ps(_mm_add_ps(lo, hi), _mm_set1_ps(0.5f)), out);
     return out;
 }
 
-template <box_type Box> box_vec_t<Box> half_extents(const Box& b) noexcept {
+template <box_type Box> detail::box_vec_t<Box> half_extents(const Box& b) noexcept {
     __m128 lo, hi;
-    load_min_max(b, lo, hi);
-    box_vec_t<Box> out{};
-    store(_mm_mul_ps(_mm_sub_ps(hi, lo), _mm_set1_ps(0.5f)), out);
+    detail::load_min_max(b, lo, hi);
+    detail::box_vec_t<Box> out{};
+    detail::store(_mm_mul_ps(_mm_sub_ps(hi, lo), _mm_set1_ps(0.5f)), out);
     return out;
 }
 
-template <box_type Box> box_vec_t<Box> extents(const Box& b) noexcept {
+template <box_type Box> detail::box_vec_t<Box> extents(const Box& b) noexcept {
     __m128 lo, hi;
-    load_min_max(b, lo, hi);
+    detail::load_min_max(b, lo, hi);
 
-    box_vec_t<Box> out{};
-    store(_mm_sub_ps(hi, lo), out);
+    detail::box_vec_t<Box> out{};
+    detail::store(_mm_sub_ps(hi, lo), out);
     return out;
 }
 
-template <box_type Box> Box translate(const Box& b, const box_vec_t<Box>& offset) noexcept {
+template <box_type Box> Box translate(const Box& b, const detail::box_vec_t<Box>& offset) noexcept {
     __m128 lo, hi;
-    load_min_max(b, lo, hi);
-    const __m128 o = load(offset);
-    return make_box<Box>(_mm_add_ps(lo, o), _mm_add_ps(hi, o));
+    detail::load_min_max(b, lo, hi);
+    const __m128 o = detail::load(offset);
+    return detail::make_box<Box>(_mm_add_ps(lo, o), _mm_add_ps(hi, o));
 }
 
-template <box_type Box> Box scale_about_origin(const Box& b, const box_vec_t<Box>& s) noexcept {
+template <box_type Box> Box scale_about_origin(const Box& b, const detail::box_vec_t<Box>& s) noexcept {
     __m128 lo, hi;
-    load_min_max(b, lo, hi);
-    const __m128 sv = load(s);
-    return make_box<Box>(_mm_mul_ps(lo, sv), _mm_mul_ps(hi, sv));
+    detail::load_min_max(b, lo, hi);
+    const __m128 sv = detail::load(s);
+    return detail::make_box<Box>(_mm_mul_ps(lo, sv), _mm_mul_ps(hi, sv));
 }
 
 template <box_type Box> Box scale_uniform(const Box& b, const float s) noexcept {
     __m128 lo, hi;
-    load_min_max(b, lo, hi);
+    detail::load_min_max(b, lo, hi);
     const __m128 sv = _mm_set1_ps(s);
-    return make_box<Box>(_mm_mul_ps(lo, sv), _mm_mul_ps(hi, sv));
+    return detail::make_box<Box>(_mm_mul_ps(lo, sv), _mm_mul_ps(hi, sv));
 }
 
 template <box_type Box> Box dilate(const Box& b, const float amount) noexcept {
     __m128 lo, hi;
-    load_min_max(b, lo, hi);
+    detail::load_min_max(b, lo, hi);
     const __m128 a = _mm_set1_ps(amount);
-    return make_box<Box>(_mm_sub_ps(lo, a), _mm_add_ps(hi, a));
+    return detail::make_box<Box>(_mm_sub_ps(lo, a), _mm_add_ps(hi, a));
 }
 
-template <box_type Box> Box dilate(const Box& b, const box_vec_t<Box>& amount) noexcept {
+template <box_type Box> Box dilate(const Box& b, const detail::box_vec_t<Box>& amount) noexcept {
     __m128 lo, hi;
-    load_min_max(b, lo, hi);
-    const __m128 a = load(amount);
-    return make_box<Box>(_mm_sub_ps(lo, a), _mm_add_ps(hi, a));
+    detail::load_min_max(b, lo, hi);
+    const __m128 a = detail::load(amount);
+    return detail::make_box<Box>(_mm_sub_ps(lo, a), _mm_add_ps(hi, a));
 }
 
 template <box_type Box> bool overlaps(const Box& a, const Box& b) noexcept {
     __m128 a_lo, a_hi, b_lo, b_hi;
-    load_min_max(a, a_lo, a_hi);
-    load_min_max(b, b_lo, b_hi);
+    detail::load_min_max(a, a_lo, a_hi);
+    detail::load_min_max(b, b_lo, b_hi);
 
-    constexpr auto mask{box_traits<Box>::lane_mask};
+    constexpr auto mask{detail::box_traits<Box>::lane_mask};
     const auto sep{_mm_movemask_ps(_mm_cmpgt_ps(a_lo, b_hi)) | _mm_movemask_ps(_mm_cmpgt_ps(b_lo, a_hi))};
 
     return !(sep & mask);
@@ -792,72 +801,72 @@ template <box_type Box> bool overlaps(const Box& a, const Box& b) noexcept {
 
 template <box_type Box> bool contains(const Box& outer, const Box& inner) noexcept {
     __m128 o_lo, o_hi, i_lo, i_hi;
-    load_min_max(outer, o_lo, o_hi);
-    load_min_max(inner, i_lo, i_hi);
+    detail::load_min_max(outer, o_lo, o_hi);
+    detail::load_min_max(inner, i_lo, i_hi);
 
-    constexpr auto mask{box_traits<Box>::lane_mask};
+    constexpr auto mask{detail::box_traits<Box>::lane_mask};
     const auto ok{_mm_movemask_ps(_mm_cmple_ps(o_lo, i_lo)) & _mm_movemask_ps(_mm_cmple_ps(i_hi, o_hi))};
 
     return (ok & mask) == mask;
 }
 
-template <box_type Box> bool contains_point(const Box& b, const box_vec_t<Box>& p) noexcept {
+template <box_type Box> bool contains_point(const Box& b, const detail::box_vec_t<Box>& p) noexcept {
     __m128 lo, hi;
-    load_min_max(b, lo, hi);
-    const __m128 pv = load(p);
+    detail::load_min_max(b, lo, hi);
+    const __m128 pv = detail::load(p);
 
-    constexpr auto mask = box_traits<Box>::lane_mask;
+    constexpr auto mask = detail::box_traits<Box>::lane_mask;
     const std::int32_t ok = _mm_movemask_ps(_mm_cmple_ps(lo, pv)) & _mm_movemask_ps(_mm_cmple_ps(pv, hi));
     return (ok & mask) == mask;
 }
 
 template <box_type Box> Box intersection(const Box& a, const Box& b) noexcept {
     __m128 a_lo, a_hi, b_lo, b_hi;
-    load_min_max(a, a_lo, a_hi);
-    load_min_max(b, b_lo, b_hi);
-    return make_box<Box>(_mm_max_ps(a_lo, b_lo), _mm_min_ps(a_hi, b_hi));
+    detail::load_min_max(a, a_lo, a_hi);
+    detail::load_min_max(b, b_lo, b_hi);
+    return detail::make_box<Box>(_mm_max_ps(a_lo, b_lo), _mm_min_ps(a_hi, b_hi));
 }
 
 template <box_type Box> Box merge(const Box& a, const Box& b) noexcept {
     __m128 a_lo, a_hi, b_lo, b_hi;
-    load_min_max(a, a_lo, a_hi);
-    load_min_max(b, b_lo, b_hi);
-    return make_box<Box>(_mm_min_ps(a_lo, b_lo), _mm_max_ps(a_hi, b_hi));
+    detail::load_min_max(a, a_lo, a_hi);
+    detail::load_min_max(b, b_lo, b_hi);
+    return detail::make_box<Box>(_mm_min_ps(a_lo, b_lo), _mm_max_ps(a_hi, b_hi));
 }
 
-template <box_type Box> Box expand(const Box& b, const box_vec_t<Box>& p) noexcept {
+template <box_type Box> Box expand(const Box& b, const detail::box_vec_t<Box>& p) noexcept {
     __m128 lo, hi;
-    load_min_max(b, lo, hi);
-    const __m128 pv = load(p);
-    return make_box<Box>(_mm_min_ps(lo, pv), _mm_max_ps(hi, pv));
+    detail::load_min_max(b, lo, hi);
+    const __m128 pv = detail::load(p);
+    return detail::make_box<Box>(_mm_min_ps(lo, pv), _mm_max_ps(hi, pv));
 }
 
-template <box_type Box> float distance_squared(const Box& b, const box_vec_t<Box>& p) noexcept {
+template <box_type Box> float distance_squared(const Box& b, const detail::box_vec_t<Box>& p) noexcept {
     __m128 lo, hi;
-    load_min_max(b, lo, hi);
-    const __m128 pv = load(p);
+    detail::load_min_max(b, lo, hi);
+    const __m128 pv = detail::load(p);
     const __m128 nearest = _mm_min_ps(_mm_max_ps(pv, lo), hi);
     const __m128 diff = _mm_sub_ps(pv, nearest);
-    constexpr std::int32_t dp = box_traits<Box>::dp_mask;
+    constexpr std::int32_t dp = detail::box_traits<Box>::dp_mask;
     return _mm_cvtss_f32(_mm_dp_ps(diff, diff, dp));
 }
 
-template <box_type Box> float distance(const Box& b, const box_vec_t<Box>& p) noexcept {
+template <box_type Box> float distance(const Box& b, const detail::box_vec_t<Box>& p) noexcept {
     return std::sqrt(distance_squared(b, p));
 }
 
-template <box_type Box> box_vec_t<Box> closest_point(const Box& b, const box_vec_t<Box>& p) noexcept {
+template <box_type Box> detail::box_vec_t<Box> closest_point(const Box& b, const detail::box_vec_t<Box>& p) noexcept {
     __m128 lo, hi;
-    load_min_max(b, lo, hi);
-    const __m128 pv = load(p);
-    box_vec_t<Box> out{};
-    store(_mm_min_ps(_mm_max_ps(pv, lo), hi), out);
+    detail::load_min_max(b, lo, hi);
+    const __m128 pv = detail::load(p);
+    detail::box_vec_t<Box> out{};
+    detail::store(_mm_min_ps(_mm_max_ps(pv, lo), hi), out);
     return out;
 }
 
 inline box2d box2d_from_center_half(const vec2& c, const vec2& half_ext) noexcept {
-    const __m128 cv{load(c)};
-    const __m128 hv{load(half_ext)};
+    const __m128 cv{detail::load(c)};
+    const __m128 hv{detail::load(half_ext)};
     const __m128 cc{_mm_movelh_ps(cv, cv)};
     const __m128 hh{_mm_movelh_ps(hv, hv)};
     /* layout: {min.x, min.y, max.x, max.y} = center -/+ half_ext, packed into one 128-bit store */
@@ -868,14 +877,14 @@ inline box2d box2d_from_center_half(const vec2& c, const vec2& half_ext) noexcep
 }
 
 inline box2d box2d_from_point(const vec2& p) noexcept {
-    const __m128 v{load(p)};
+    const __m128 v{detail::load(p)};
     box2d b{};
     _mm_store_ps(&b.min.x, _mm_movelh_ps(v, v));
     return b;
 }
 
 inline float area(const box2d& b) noexcept {
-    const __m128 v = load(b);
+    const __m128 v = detail::load(b);
     const __m128 lo = v;
     const __m128 hi = _mm_movehl_ps(v, v);
 
@@ -885,7 +894,7 @@ inline float area(const box2d& b) noexcept {
 }
 
 inline float perimeter(const box2d& b) noexcept {
-    const __m128 v = load(b);
+    const __m128 v = detail::load(b);
     const __m128 lo = v;
     const __m128 hi = _mm_movehl_ps(v, v);
     /* {w, h, ?, ?} */
@@ -897,8 +906,8 @@ inline float perimeter(const box2d& b) noexcept {
 }
 
 inline box3d box3d_from_center_half(const vec3& c, const vec3& half_ext) noexcept {
-    const __m128 cv{load(c)};
-    const __m128 hv{load(half_ext)};
+    const __m128 cv{detail::load(c)};
+    const __m128 hv{detail::load(half_ext)};
     box3d b{};
     _mm_store_ps(&b.min.x, _mm_sub_ps(cv, hv));
     _mm_store_ps(&b.max.x, _mm_add_ps(cv, hv));
@@ -906,7 +915,7 @@ inline box3d box3d_from_center_half(const vec3& c, const vec3& half_ext) noexcep
 }
 
 inline box3d box3d_from_point(const vec3& p) noexcept {
-    const __m128 v{load(p)};
+    const __m128 v{detail::load(p)};
     box3d b{};
     _mm_store_ps(&b.min.x, v);
     _mm_store_ps(&b.max.x, v);
@@ -964,38 +973,41 @@ inline float surface_area(const box3d& b) noexcept {
 inline mat4 mat4_diagonal(const float d) noexcept {
     const __m128 z = _mm_setzero_ps();
     const __m128 dv = _mm_set1_ps(d);
-    return store_cols(_mm_blend_ps(z, dv, 0b0001), _mm_blend_ps(z, dv, 0b0010), _mm_blend_ps(z, dv, 0b0100), _mm_blend_ps(z, dv, 0b1000));
+    return detail::store_cols(_mm_blend_ps(z, dv, 0b0001), _mm_blend_ps(z, dv, 0b0010), _mm_blend_ps(z, dv, 0b0100), _mm_blend_ps(z, dv, 0b1000));
 }
 
 inline mat4 add(const mat4& a, const mat4& b) noexcept {
-    return store_cols(_mm_add_ps(_mm_load_ps(&a.cols[0].x), _mm_load_ps(&b.cols[0].x)), _mm_add_ps(_mm_load_ps(&a.cols[1].x), _mm_load_ps(&b.cols[1].x)),
-        _mm_add_ps(_mm_load_ps(&a.cols[2].x), _mm_load_ps(&b.cols[2].x)), _mm_add_ps(_mm_load_ps(&a.cols[3].x), _mm_load_ps(&b.cols[3].x)));
+    return detail::store_cols(_mm_add_ps(_mm_load_ps(&a.cols[0].x), _mm_load_ps(&b.cols[0].x)),
+        _mm_add_ps(_mm_load_ps(&a.cols[1].x), _mm_load_ps(&b.cols[1].x)), _mm_add_ps(_mm_load_ps(&a.cols[2].x), _mm_load_ps(&b.cols[2].x)),
+        _mm_add_ps(_mm_load_ps(&a.cols[3].x), _mm_load_ps(&b.cols[3].x)));
 }
 
 inline mat4 sub(const mat4& a, const mat4& b) noexcept {
-    return store_cols(_mm_sub_ps(_mm_load_ps(&a.cols[0].x), _mm_load_ps(&b.cols[0].x)), _mm_sub_ps(_mm_load_ps(&a.cols[1].x), _mm_load_ps(&b.cols[1].x)),
-        _mm_sub_ps(_mm_load_ps(&a.cols[2].x), _mm_load_ps(&b.cols[2].x)), _mm_sub_ps(_mm_load_ps(&a.cols[3].x), _mm_load_ps(&b.cols[3].x)));
+    return detail::store_cols(_mm_sub_ps(_mm_load_ps(&a.cols[0].x), _mm_load_ps(&b.cols[0].x)),
+        _mm_sub_ps(_mm_load_ps(&a.cols[1].x), _mm_load_ps(&b.cols[1].x)), _mm_sub_ps(_mm_load_ps(&a.cols[2].x), _mm_load_ps(&b.cols[2].x)),
+        _mm_sub_ps(_mm_load_ps(&a.cols[3].x), _mm_load_ps(&b.cols[3].x)));
 }
 
 inline mat4 scale(const mat4& m, const float s) noexcept {
     const __m128 sv = _mm_set1_ps(s);
-    return store_cols(_mm_mul_ps(_mm_load_ps(&m.cols[0].x), sv), _mm_mul_ps(_mm_load_ps(&m.cols[1].x), sv), _mm_mul_ps(_mm_load_ps(&m.cols[2].x), sv),
+    return detail::store_cols(_mm_mul_ps(_mm_load_ps(&m.cols[0].x), sv), _mm_mul_ps(_mm_load_ps(&m.cols[1].x), sv), _mm_mul_ps(_mm_load_ps(&m.cols[2].x), sv),
         _mm_mul_ps(_mm_load_ps(&m.cols[3].x), sv));
 }
 
 inline mat4 negate(const mat4& m) noexcept {
     const __m128 sign = _mm_set1_ps(-0.0f);
-    return store_cols(_mm_xor_ps(_mm_load_ps(&m.cols[0].x), sign), _mm_xor_ps(_mm_load_ps(&m.cols[1].x), sign), _mm_xor_ps(_mm_load_ps(&m.cols[2].x), sign),
-        _mm_xor_ps(_mm_load_ps(&m.cols[3].x), sign));
+    return detail::store_cols(_mm_xor_ps(_mm_load_ps(&m.cols[0].x), sign), _mm_xor_ps(_mm_load_ps(&m.cols[1].x), sign),
+        _mm_xor_ps(_mm_load_ps(&m.cols[2].x), sign), _mm_xor_ps(_mm_load_ps(&m.cols[3].x), sign));
 }
 
 /* ============================================================
  * mat4 * mat4
  * ============================================================ */
 inline mat4 operator*(const mat4& a, const mat4& b) noexcept {
-    const auto lhs = load_cols(a);
-    const auto rhs = load_cols(b);
-    return store_cols(linear_combine(lhs, rhs.c[0]), linear_combine(lhs, rhs.c[1]), linear_combine(lhs, rhs.c[2]), linear_combine(lhs, rhs.c[3]));
+    const auto lhs = detail::load_cols(a);
+    const auto rhs = detail::load_cols(b);
+    return detail::store_cols(detail::linear_combine(lhs, rhs.c[0]), detail::linear_combine(lhs, rhs.c[1]), detail::linear_combine(lhs, rhs.c[2]),
+        detail::linear_combine(lhs, rhs.c[3]));
 }
 
 /* ============================================================
@@ -1004,9 +1016,9 @@ inline mat4 operator*(const mat4& a, const mat4& b) noexcept {
 
 /** Transform a vec4 by a mat4: M * v. */
 inline vec4 operator*(const mat4& m, const vec4& v) noexcept {
-    const auto cols{load_cols(m)};
+    const auto cols{detail::load_cols(m)};
     vec4 out{};
-    _mm_store_ps(&out.x, linear_combine(cols, _mm_load_ps(&v.x)));
+    _mm_store_ps(&out.x, detail::linear_combine(cols, _mm_load_ps(&v.x)));
     return out;
 }
 
@@ -1018,35 +1030,36 @@ inline vec4 operator*(const mat4& m, const vec4& v) noexcept {
  * Use @c transform_dir for direction vectors (w = 0).
  */
 inline vec3 operator*(const mat4& m, const vec3& p) noexcept {
-    const auto cols{load_cols(m)};
+    const auto cols{detail::load_cols(m)};
     auto v{_mm_load_ps(&p.x)};
     v = _mm_blend_ps(v, _mm_set1_ps(1.0f), 0b1000); /* {x, y, z, 1} */
     vec3 out{};
-    _mm_store_ps(&out.x, linear_combine(cols, v));
+    _mm_store_ps(&out.x, detail::linear_combine(cols, v));
     return out;
 }
 
 inline vec4 transform_vec4(const mat4& m, const vec4& v) noexcept {
-    const auto cols{load_cols(m)};
+    const auto cols{detail::load_cols(m)};
     vec4 out{};
-    _mm_store_ps(&out.x, linear_combine(cols, _mm_load_ps(&v.x)));
+    _mm_store_ps(&out.x, detail::linear_combine(cols, _mm_load_ps(&v.x)));
     return out;
 }
 
 inline vec3 transform_point(const mat4& m, const vec3& p) noexcept {
-    const auto cols{load_cols(m)};
+    const auto cols{detail::load_cols(m)};
     auto v{_mm_load_ps(&p.x)};
     v = _mm_blend_ps(v, _mm_set1_ps(1.0f), 0b1000); /* {x, y, z, 1} */
     vec3 out{};
-    _mm_store_ps(&out.x, linear_combine(cols, v));
+    _mm_store_ps(&out.x, detail::linear_combine(cols, v));
     return out;
 }
 
 inline vec3 transform_dir(const mat4& m, const vec3& d) noexcept {
-    const auto cols{load_cols(m)};
+    const auto cols{detail::load_cols(m)};
     vec3 out{};
-    _mm_store_ps(&out.x, linear_combine(cols, _mm_load_ps(&d.x)));
-    return out; /* w lanes are zero in vec3 padding, so col[3] contributes nothing */
+    /* The pad lane is the w of the product, and it holds whatever the last store left there. */
+    _mm_store_ps(&out.x, detail::linear_combine(cols, detail::clear_pad(_mm_load_ps(&d.x))));
+    return out;
 }
 
 /* ============================================================
@@ -1063,7 +1076,7 @@ inline mat4 transpose(const mat4& m) noexcept {
     const __m128 lo23 = _mm_unpacklo_ps(c2, c3);
     const __m128 hi23 = _mm_unpackhi_ps(c2, c3);
 
-    return store_cols(_mm_movelh_ps(lo01, lo23), _mm_movehl_ps(lo23, lo01), _mm_movelh_ps(hi01, hi23), _mm_movehl_ps(hi23, hi01));
+    return detail::store_cols(_mm_movelh_ps(lo01, lo23), _mm_movehl_ps(lo23, lo01), _mm_movelh_ps(hi01, hi23), _mm_movehl_ps(hi23, hi01));
 }
 
 /* ============================================================
@@ -1074,12 +1087,12 @@ inline float trace(const mat4& m) noexcept {
 }
 
 inline float determinant(const mat4& m) noexcept {
-    const auto [s0, s1, s2, s3, s4, s5, t0, t1, t2, t3, t4, t5] = compute_sub_dets(m);
+    const auto [s0, s1, s2, s3, s4, s5, t0, t1, t2, t3, t4, t5] = detail::compute_sub_dets(m);
     return s0 * t5 - s1 * t4 + s2 * t3 + s3 * t2 - s4 * t1 + s5 * t0;
 }
 
 inline mat4 inverse(const mat4& m) noexcept {
-    const auto [s0, s1, s2, s3, s4, s5, t0, t1, t2, t3, t4, t5] = compute_sub_dets(m);
+    const auto [s0, s1, s2, s3, s4, s5, t0, t1, t2, t3, t4, t5] = detail::compute_sub_dets(m);
 
     const auto det{s0 * t5 - s1 * t4 + s2 * t3 + s3 * t2 - s4 * t1 + s5 * t0};
     const auto inv_det{1.0f / det};
@@ -1147,7 +1160,7 @@ inline mat4 inverse_rigid(const mat4& m) noexcept {
     /* Combine: {-dot(r0,t), -dot(r1,t), -dot(r2,t), 1} */
     const __m128 new_t = _mm_blend_ps(_mm_or_ps(_mm_or_ps(d0, d1), d2), _mm_set1_ps(1.0f), 0b1000);
 
-    return store_cols(r0, r1, r2, new_t);
+    return detail::store_cols(r0, r1, r2, new_t);
 }
 
 /**
@@ -1183,39 +1196,34 @@ inline mat4 inverse_affine_uniform(const mat4& m) noexcept {
     const __m128 d2{_mm_dp_ps(r2, neg_t, 0x74)};
     const __m128 new_t = _mm_blend_ps(_mm_or_ps(_mm_or_ps(d0, d1), d2), _mm_set1_ps(1.0f), 0b1000);
 
-    return store_cols(r0, r1, r2, new_t);
+    return detail::store_cols(r0, r1, r2, new_t);
 }
 
 /* ============================================================
  * mat2 operations
  * ============================================================ */
 
-/* Loads the full mat2 as a single __m128: {col0.x, col0.y, col1.x, col1.y} = {a, c, b, d}. */
-inline __m128 load(const mat2& m) noexcept {
-    return _mm_load_ps(&m.cols[0].x);
-}
-
 inline mat2 add(const mat2& a, const mat2& b) noexcept {
     mat2 r{};
-    _mm_store_ps(&r.cols[0].x, _mm_add_ps(load(a), load(b)));
+    _mm_store_ps(&r.cols[0].x, _mm_add_ps(detail::load(a), detail::load(b)));
     return r;
 }
 
 inline mat2 sub(const mat2& a, const mat2& b) noexcept {
     mat2 r{};
-    _mm_store_ps(&r.cols[0].x, _mm_sub_ps(load(a), load(b)));
+    _mm_store_ps(&r.cols[0].x, _mm_sub_ps(detail::load(a), detail::load(b)));
     return r;
 }
 
 inline mat2 scale(const mat2& m, const float s) noexcept {
     mat2 r{};
-    _mm_store_ps(&r.cols[0].x, _mm_mul_ps(load(m), _mm_set1_ps(s)));
+    _mm_store_ps(&r.cols[0].x, _mm_mul_ps(detail::load(m), _mm_set1_ps(s)));
     return r;
 }
 
 inline mat2 negate(const mat2& m) noexcept {
     mat2 r{};
-    _mm_store_ps(&r.cols[0].x, _mm_xor_ps(load(m), _mm_set1_ps(-0.0f)));
+    _mm_store_ps(&r.cols[0].x, _mm_xor_ps(detail::load(m), _mm_set1_ps(-0.0f)));
     return r;
 }
 
@@ -1226,8 +1234,8 @@ inline mat2 negate(const mat2& m) noexcept {
  * Memory layout: lhs = {a, c, b, d}, rhs = {e, g, f, h}
  */
 inline mat2 operator*(const mat2& lhs, const mat2& rhs) noexcept {
-    const __m128 l{load(lhs)}; /* {a, c, b, d} */
-    const __m128 r{load(rhs)}; /* {e, g, f, h} */
+    const __m128 l{detail::load(lhs)}; /* {a, c, b, d} */
+    const __m128 r{detail::load(rhs)}; /* {e, g, f, h} */
 
     /* {a, c, a, c} * {e, e, f, f} + {b, d, b, d} * {g, g, h, h} */
     const __m128 ac_ac{_mm_movelh_ps(l, l)};
@@ -1242,8 +1250,8 @@ inline mat2 operator*(const mat2& lhs, const mat2& rhs) noexcept {
 
 /* mat2 * vec2: result = {a,c}*x + {b,d}*y */
 inline vec2 transform_vec2(const mat2& m, const vec2& v) noexcept {
-    const __m128 mv{load(m)}; /* {a, c, b, d} */
-    const __m128 vv{load(v)}; /* {x, y, 0, 0} */
+    const __m128 mv{detail::load(m)}; /* {a, c, b, d} */
+    const __m128 vv{detail::load(v)}; /* {x, y, 0, 0} */
 
     const __m128 ac{mv};
     const __m128 bd{_mm_movehl_ps(mv, mv)};
@@ -1251,20 +1259,20 @@ inline vec2 transform_vec2(const mat2& m, const vec2& v) noexcept {
     const __m128 yy{_mm_shuffle_ps(vv, vv, _MM_SHUFFLE(1, 1, 1, 1))};
 
     vec2 out{};
-    store(_mm_fmadd_ps(ac, xx, _mm_mul_ps(bd, yy)), out);
+    detail::store(_mm_fmadd_ps(ac, xx, _mm_mul_ps(bd, yy)), out);
     return out;
 }
 
 /* Transpose mat2: {a, c, b, d} -> {a, b, c, d}. */
 inline mat2 transpose(const mat2& m) noexcept {
     mat2 r{};
-    _mm_store_ps(&r.cols[0].x, _mm_shuffle_ps(load(m), load(m), _MM_SHUFFLE(3, 1, 2, 0)));
+    _mm_store_ps(&r.cols[0].x, _mm_shuffle_ps(detail::load(m), detail::load(m), _MM_SHUFFLE(3, 1, 2, 0)));
     return r;
 }
 
 /* det(mat2) = ad - bc. Memory: {a, c, b, d}. */
 inline float determinant(const mat2& m) noexcept {
-    const __m128 v{load(m)};
+    const __m128 v{detail::load(m)};
     /* {a, c, b, d} * {d, b, c, a} -> {ad, cb, bc, da}; lane0 - lane2 = ad - bc */
     const __m128 swz{_mm_shuffle_ps(v, v, _MM_SHUFFLE(0, 1, 2, 3))};
     const __m128 prod{_mm_mul_ps(v, swz)};
@@ -1272,7 +1280,7 @@ inline float determinant(const mat2& m) noexcept {
 }
 
 inline mat2 inverse(const mat2& m) noexcept {
-    const __m128 v{load(m)}; /* {a, c, b, d} */
+    const __m128 v{detail::load(m)}; /* {a, c, b, d} */
 
     const __m128 d_lane{_mm_shuffle_ps(v, v, _MM_SHUFFLE(3, 3, 3, 3))};
     const __m128 b_lane{_mm_shuffle_ps(v, v, _MM_SHUFFLE(2, 2, 2, 2))};
@@ -1312,21 +1320,22 @@ inline mat3 to_mat3(const mat4& m) noexcept {
 }
 
 inline mat4 to_mat4(const mat3& m) noexcept {
-    return store_cols(
-        clear_pad(_mm_load_ps(&m.cols[0].x)), clear_pad(_mm_load_ps(&m.cols[1].x)), clear_pad(_mm_load_ps(&m.cols[2].x)), _mm_setr_ps(0.0f, 0.0f, 0.0f, 1.0f));
+    return detail::store_cols(detail::clear_pad(_mm_load_ps(&m.cols[0].x)), detail::clear_pad(_mm_load_ps(&m.cols[1].x)),
+        detail::clear_pad(_mm_load_ps(&m.cols[2].x)), _mm_setr_ps(0.0f, 0.0f, 0.0f, 1.0f));
 }
 
 /* Embed mat3 + translation into mat4. */
 inline mat4 to_mat4(const mat3& m, const vec3& translation) noexcept {
     auto t{_mm_load_ps(&translation.x)};
     t = _mm_blend_ps(t, _mm_set1_ps(1.0f), 0b1000); /* {tx, ty, tz, 1} */
-    return store_cols(clear_pad(_mm_load_ps(&m.cols[0].x)), clear_pad(_mm_load_ps(&m.cols[1].x)), clear_pad(_mm_load_ps(&m.cols[2].x)), t);
+    return detail::store_cols(
+        detail::clear_pad(_mm_load_ps(&m.cols[0].x)), detail::clear_pad(_mm_load_ps(&m.cols[1].x)), detail::clear_pad(_mm_load_ps(&m.cols[2].x)), t);
 }
 
 /* Extract translation from mat4 */
 inline vec3 get_translation(const mat4& m) noexcept {
     vec3 out{};
-    store(_mm_load_ps(&m.cols[3].x), out);
+    detail::store(_mm_load_ps(&m.cols[3].x), out);
     return out;
 }
 
@@ -1357,7 +1366,7 @@ inline quat quat_from_axis_angle(const vec3& axis, const float angle) noexcept {
 }
 
 inline float dot(const quat& a, const quat& b) noexcept {
-    return _mm_cvtss_f32(_mm_dp_ps(load(a), load(b), 0xFF));
+    return _mm_cvtss_f32(_mm_dp_ps(detail::load(a), detail::load(b), 0xFF));
 }
 
 inline float norm_sq(const quat& q) noexcept {
@@ -1366,17 +1375,17 @@ inline float norm_sq(const quat& q) noexcept {
 
 /* more expensive and not needed for unit quats of unit length (which should always be the case). */
 inline float norm(const quat& q) noexcept {
-    return _mm_cvtss_f32(_mm_sqrt_ss(_mm_dp_ps(load(q), load(q), 0xFF)));
+    return _mm_cvtss_f32(_mm_sqrt_ss(_mm_dp_ps(detail::load(q), detail::load(q), 0xFF)));
 }
 
 /* Negate xyz, keep w */
 inline quat conjugate(const quat& q) noexcept {
     const __m128 sign = _mm_setr_ps(-0.0f, -0.0f, -0.0f, 0.0f);
-    return store_quat(_mm_xor_ps(load(q), sign));
+    return detail::store_quat(_mm_xor_ps(detail::load(q), sign));
 }
 
 inline quat negate(const quat& q) noexcept {
-    return store_quat(_mm_xor_ps(load(q), _mm_set1_ps(-0.0f)));
+    return detail::store_quat(_mm_xor_ps(detail::load(q), _mm_set1_ps(-0.0f)));
 }
 
 /* Quaternions should always be unit length, but floating-point drift accumulates
@@ -1384,18 +1393,18 @@ inline quat negate(const quat& q) noexcept {
  *   if (std::abs(norm_sq(q) - 1.0f) > tolerance) { q = normalized(q); }
  */
 inline quat normalized(const quat& q) noexcept {
-    const __m128 v = load(q);
+    const __m128 v = detail::load(q);
     const __m128 len = _mm_sqrt_ps(_mm_dp_ps(v, v, 0xFF));
-    return store_quat(_mm_div_ps(v, len));
+    return detail::store_quat(_mm_div_ps(v, len));
 }
 
 /* For unit quaternions the inverse is the conjugate; for general quaternions: conjugate / norm^2. */
 inline quat inverse(const quat& q) noexcept {
-    const __m128 v = load(q);
+    const __m128 v = detail::load(q);
     const __m128 sign = _mm_setr_ps(-0.0f, -0.0f, -0.0f, 0.0f);
     const __m128 conj = _mm_xor_ps(v, sign);
     const __m128 n2 = _mm_dp_ps(v, v, 0xFF);
-    return store_quat(_mm_div_ps(conj, n2));
+    return detail::store_quat(_mm_div_ps(conj, n2));
 }
 
 /* just the conjugate, much cheaper, assumes unit quaternion */
@@ -1416,8 +1425,8 @@ inline quat inverse_unit(const quat& q) noexcept {
  */
 
 inline quat operator*(const quat& q1, const quat& q2) noexcept {
-    const __m128 a = load(q1);
-    const __m128 b = load(q2);
+    const __m128 a = detail::load(q1);
+    const __m128 b = detail::load(q2);
 
     /* broadcast each component of q1 */
     const __m128 a_xxxx = _mm_shuffle_ps(a, a, _MM_SHUFFLE(0, 0, 0, 0));
@@ -1445,7 +1454,7 @@ inline quat operator*(const quat& q1, const quat& q2) noexcept {
     r = _mm_fmadd_ps(a_yyyy, _mm_mul_ps(b_zwxy, sign_y), r);
     r = _mm_fmadd_ps(a_zzzz, _mm_mul_ps(b_yxwz, sign_z), r);
 
-    return store_quat(r);
+    return detail::store_quat(r);
 }
 
 /**
@@ -1458,7 +1467,7 @@ inline quat operator*(const quat& q1, const quat& q2) noexcept {
  */
 
 inline vec3 rotate(const quat& q, const vec3& v) noexcept {
-    const __m128 qv{load(q)};
+    const __m128 qv{detail::load(q)};
     const __m128 vv{_mm_load_ps(&v.x)};
     const __m128 q_xyz{qv}; /* w lane is ignored in cross products */
     const __m128 qw{_mm_shuffle_ps(qv, qv, _MM_SHUFFLE(3, 3, 3, 3))};
@@ -1518,8 +1527,8 @@ inline mat4 to_mat4(const quat& q, const vec3& translation) noexcept {
 
 inline bool nearly_equal(const quat& a, const quat& b, const float abs_tol = fp32_abs_tol, const float rel_tol = fp32_rel_tol) noexcept {
     /* quaternions q and -q represent the same rotation,c heck both orientations */
-    const __m128 av = load(a);
-    const __m128 bv = load(b);
+    const __m128 av = detail::load(a);
+    const __m128 bv = detail::load(b);
     const __m128 neg_bv = _mm_xor_ps(bv, _mm_set1_ps(-0.0f));
 
     /* |a - b| */
@@ -1550,7 +1559,7 @@ inline bool is_axis_aligned(const vec3& direction, const float tolerance = fp32_
     const auto snapped{snap_to_axis(direction)};
     const auto dir_norm{normalized(direction)};
     /* |dot(normalized, snapped)| ~= 1 if axis-aligned */
-    const auto d{std::abs(_mm_cvtss_f32(_mm_dp_ps(load(dir_norm), load(snapped), dp_scalar_mask<vec3>())))};
+    const auto d{std::abs(_mm_cvtss_f32(_mm_dp_ps(detail::load(dir_norm), detail::load(snapped), detail::dp_scalar_mask<vec3>())))};
     return d >= (1.0f - tolerance);
 }
 
@@ -1563,11 +1572,11 @@ inline bool is_axis_aligned(const vec3& direction, const float tolerance = fp32_
  * Uses load/store helpers to handle vec2 (8-byte aligned) correctly.
  */
 template <spatial_vector Vec> Vec closest_point_on_segment(const Vec& point, const Vec& seg_start, const Vec& seg_end) noexcept {
-    constexpr auto mask{dp_broadcast_mask<Vec>()};
+    constexpr auto mask{detail::dp_broadcast_mask<Vec>()};
 
-    const __m128 p{load(point)};
-    const __m128 a{load(seg_start)};
-    const __m128 b{load(seg_end)};
+    const __m128 p{detail::load(point)};
+    const __m128 a{detail::load(seg_start)};
+    const __m128 b{detail::load(seg_end)};
 
     const __m128 ab{_mm_sub_ps(b, a)};
     const __m128 ap{_mm_sub_ps(p, a)};
@@ -1581,7 +1590,7 @@ template <spatial_vector Vec> Vec closest_point_on_segment(const Vec& point, con
     t = _mm_min_ps(t, _mm_set1_ps(1.0f));
 
     Vec out{};
-    store(_mm_fmadd_ps(t, ab, a), out);
+    detail::store(_mm_fmadd_ps(t, ab, a), out);
     return out;
 }
 
@@ -1807,7 +1816,7 @@ inline segment_intersection_2d intersect_segments_2d(const vec2& a0, const vec2&
     }
 
     vec2 point{};
-    store(_mm_fmadd_ps(_mm_set1_ps(t), load(da), load(a0)), point);
+    detail::store(_mm_fmadd_ps(_mm_set1_ps(t), detail::load(da), detail::load(a0)), point);
 
     return {point, t, u, true};
 }
@@ -1823,11 +1832,11 @@ inline segment_intersection_2d intersect_segments_2d(const vec2& a0, const vec2&
  */
 inline ray_box_hit intersect_ray_box(const vec2& origin, const vec2& direction, const box2d& box) noexcept {
     /* For vec2 we only care about lanes 0 and 1.
-     * Use load() for origin/direction (alignas(8)), load_min_max for the box. */
-    const __m128 orig{load(origin)};
-    const __m128 inv_dir{_mm_div_ps(_mm_set1_ps(1.0f), load(direction))};
+     * Use detail::load() for origin/direction (alignas(8)), load_min_max for the box. */
+    const __m128 orig{detail::load(origin)};
+    const __m128 inv_dir{_mm_div_ps(_mm_set1_ps(1.0f), detail::load(direction))};
     __m128 bmin, bmax;
-    load_min_max(box, bmin, bmax);
+    detail::load_min_max(box, bmin, bmax);
 
     /* t values for near and far slabs */
     const __m128 t1 = _mm_mul_ps(_mm_sub_ps(bmin, orig), inv_dir);
@@ -1955,7 +1964,7 @@ inline segment_polygon_hit intersect_segment_polygon(const vec2& a, const vec2& 
 }
 
 inline ivec2 grid_cell(const vec2& point, const vec2& grid_origin, const float cell_size) noexcept {
-    const __m128 p{_mm_sub_ps(load(point), load(grid_origin))};
+    const __m128 p{_mm_sub_ps(detail::load(point), detail::load(grid_origin))};
     const __m128 inv_size = _mm_set1_ps(1.0f / cell_size);
     const __m128 cell_f = _mm_floor_ps(_mm_mul_ps(p, inv_size));
 

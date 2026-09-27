@@ -69,6 +69,12 @@ compiles unchanged against the other.
   construction and signed-distance/projection queries, 3D<->2D plane-basis
   projection (with batch variants), and full TRS transform composition,
   inversion, and point/direction application.
+- **Batch queries over SoA data**: points in a box, boxes overlapping a box or
+  containing a point, ray against many boxes, and bounds, as composable
+  predicates over float, double or int32 coordinates, returning counts, bit
+  masks or compacted index lists, over your own arrays or padded, pmr-backed
+  buffers.
+  See [docs/soa.md](docs/soa.md).
 - **Intersection & spatial queries**: 2D segment intersection, ray-AABB and
   segment-AABB tests, closest distance between two 3D segments (for
   capsule/clearance checks), point-in-polygon (winding number), segment-polygon,
@@ -178,11 +184,12 @@ module interface with the matching instruction set.
 
 ### Options
 
-| Option         | Default        | Description                                  |
-| -------------- | -------------- | -------------------------------------------- |
-| `SGL_TESTS`    | `OFF`          | Build the GoogleTest unit-test suite         |
-| `SGL_PIC`      | `OFF`          | Build with position-independent code         |
-| `SGL_INSTALL`  | top-level only | Generate install + `find_package()` rules    |
+| Option           | Default        | Description                                  |
+| ---------------- | -------------- | -------------------------------------------- |
+| `SGL_TESTS`      | `OFF`          | Build the GoogleTest unit-test suite         |
+| `SGL_BENCHMARKS` | `OFF`          | Build the Google Benchmark suite             |
+| `SGL_PIC`        | `OFF`          | Build with position-independent code         |
+| `SGL_INSTALL`    | top-level only | Generate install + `find_package()` rules    |
 
 ### Running the tests
 

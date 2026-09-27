@@ -162,6 +162,18 @@ TEST(Mat4, TransformDir) {
     EXPECT_NEAR(r.y, 0.0f, 1e-5f);
 }
 
+/* A vec3 out of mat4 * vec3 carries the product's w (1) in its pad lane; transform_dir must not
+ * read it as the direction's w. */
+TEST(Mat4, TransformDirIgnoresThePadLane) {
+    sgl::mat4 m = sgl::mat4_identity;
+    m.cols[3] = {5, 10, 15, 1};
+    const sgl::vec3 d{sgl::mat4_identity * sgl::vec3{1, 2, 3}};
+    const auto r = sgl::transform_dir(m, d);
+    EXPECT_FLOAT_EQ(r.x, 1.0f);
+    EXPECT_FLOAT_EQ(r.y, 2.0f);
+    EXPECT_FLOAT_EQ(r.z, 3.0f);
+}
+
 TEST(Mat4, InverseRigid) {
     /* Build a pure-translation rigid transform */
     sgl::mat4 m = sgl::mat4_identity;

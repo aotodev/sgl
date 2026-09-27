@@ -23,7 +23,7 @@ export module sgl:simd;
 import :types;
 import :scalar;
 
-export namespace sgl {
+namespace sgl::detail {
 
 /* ============================================================
  * Overloaded D-form / Q-form NEON primitives
@@ -445,6 +445,11 @@ inline sub_dets compute_sub_dets(const mat4& m) noexcept {
     };
 }
 
+/* @see the AVX `clear_pad`. */
+inline float32x4_t clear_pad(const float32x4_t v) noexcept {
+    return vsetq_lane_f32(0.0f, v, 3);
+}
+
 /* Q-form shuffle helpers */
 inline float32x4_t combine_low(float32x4_t a, float32x4_t b) noexcept {
     return vcombine_f32(vget_low_f32(a), vget_low_f32(b));
@@ -453,7 +458,11 @@ inline float32x4_t combine_high(float32x4_t a, float32x4_t b) noexcept {
     return vcombine_f32(vget_high_f32(a), vget_high_f32(b));
 }
 
-} // namespace sgl
+inline float32x4_t load(const mat2& m) noexcept {
+    return vld1q_f32(&m.cols[0].x);
+}
+
+} // namespace sgl::detail
 
 export namespace sgl {
 
@@ -462,30 +471,30 @@ export namespace sgl {
  * ============================================================ */
 
 template <vector Vec> bool nearly_equal(const Vec& lhs, const Vec& rhs, const float abs_tol = fp32_abs_tol, const float rel_tol = fp32_rel_tol) noexcept {
-    const auto a = load(lhs);
-    const auto b = load(rhs);
-    const auto diff = n_abs(n_sub(a, b));
-    const auto exact = n_ceq(a, b);
-    const auto abs_ok = n_cle(diff, n_dup(abs_tol, a));
-    const auto largest = n_max(n_abs(a), n_abs(b));
-    const auto rel_ok = n_cle(diff, n_mul(largest, n_dup(rel_tol, a)));
-    const auto ok = n_or(exact, n_or(abs_ok, rel_ok));
-    constexpr auto mask{lane_mask<Vec>()};
-    return (n_movemask(ok) & mask) == mask;
+    const auto a = detail::load(lhs);
+    const auto b = detail::load(rhs);
+    const auto diff = detail::n_abs(detail::n_sub(a, b));
+    const auto exact = detail::n_ceq(a, b);
+    const auto abs_ok = detail::n_cle(diff, detail::n_dup(abs_tol, a));
+    const auto largest = detail::n_max(detail::n_abs(a), detail::n_abs(b));
+    const auto rel_ok = detail::n_cle(diff, detail::n_mul(largest, detail::n_dup(rel_tol, a)));
+    const auto ok = detail::n_or(exact, detail::n_or(abs_ok, rel_ok));
+    constexpr auto mask{detail::lane_mask<Vec>()};
+    return (detail::n_movemask(ok) & mask) == mask;
 }
 
 template <vector Vec> bool nearly_zero(const Vec& val, const float tol = fp32_abs_tol) noexcept {
-    const auto v = load(val);
-    const auto ok = n_clt(n_abs(v), n_dup(tol, v));
-    constexpr auto mask{lane_mask<Vec>()};
-    return (n_movemask(ok) & mask) == mask;
+    const auto v = detail::load(val);
+    const auto ok = detail::n_clt(detail::n_abs(v), detail::n_dup(tol, v));
+    constexpr auto mask{detail::lane_mask<Vec>()};
+    return (detail::n_movemask(ok) & mask) == mask;
 }
 
 template <vector Vec> bool any_nearly_zero(const Vec& val, const float tol = fp32_abs_tol) noexcept {
-    const auto v = load(val);
-    const auto ok = n_clt(n_abs(v), n_dup(tol, v));
-    constexpr auto mask{lane_mask<Vec>()};
-    return static_cast<bool>(n_movemask(ok) & mask);
+    const auto v = detail::load(val);
+    const auto ok = detail::n_clt(detail::n_abs(v), detail::n_dup(tol, v));
+    constexpr auto mask{detail::lane_mask<Vec>()};
+    return static_cast<bool>(detail::n_movemask(ok) & mask);
 }
 
 /* ============================================================
@@ -494,48 +503,48 @@ template <vector Vec> bool any_nearly_zero(const Vec& val, const float tol = fp3
 
 template <vector Vec> Vec operator-(const Vec& v) noexcept {
     Vec out{};
-    store(n_neg(load(v)), out);
+    detail::store(detail::n_neg(detail::load(v)), out);
     return out;
 }
 template <vector Vec> Vec operator+(const Vec& lhs, const Vec& rhs) noexcept {
     Vec out{};
-    store(n_add(load(lhs), load(rhs)), out);
+    detail::store(detail::n_add(detail::load(lhs), detail::load(rhs)), out);
     return out;
 }
 template <vector Vec> Vec operator-(const Vec& lhs, const Vec& rhs) noexcept {
     Vec out{};
-    store(n_sub(load(lhs), load(rhs)), out);
+    detail::store(detail::n_sub(detail::load(lhs), detail::load(rhs)), out);
     return out;
 }
 template <vector Vec> Vec operator*(const Vec& lhs, const Vec& rhs) noexcept {
     Vec out{};
-    store(n_mul(load(lhs), load(rhs)), out);
+    detail::store(detail::n_mul(detail::load(lhs), detail::load(rhs)), out);
     return out;
 }
 
 template <vector Vec> Vec operator/(const Vec& lhs, const Vec& rhs) noexcept {
     assert(!any_nearly_zero(rhs));
     Vec out{};
-    store(n_div(load(lhs), safe_divisor<Vec>(load(rhs))), out);
+    detail::store(detail::n_div(detail::load(lhs), detail::safe_divisor<Vec>(detail::load(rhs))), out);
     return out;
 }
 
 template <vector Vec> Vec& operator+=(Vec& lhs, const Vec& rhs) noexcept {
-    store(n_add(load(lhs), load(rhs)), lhs);
+    detail::store(detail::n_add(detail::load(lhs), detail::load(rhs)), lhs);
     return lhs;
 }
 template <vector Vec> Vec& operator-=(Vec& lhs, const Vec& rhs) noexcept {
-    store(n_sub(load(lhs), load(rhs)), lhs);
+    detail::store(detail::n_sub(detail::load(lhs), detail::load(rhs)), lhs);
     return lhs;
 }
 template <vector Vec> Vec& operator*=(Vec& lhs, const Vec& rhs) noexcept {
-    store(n_mul(load(lhs), load(rhs)), lhs);
+    detail::store(detail::n_mul(detail::load(lhs), detail::load(rhs)), lhs);
     return lhs;
 }
 
 template <vector Vec> Vec& operator/=(Vec& lhs, const Vec& rhs) noexcept {
     assert(!any_nearly_zero(rhs));
-    store(n_div(load(lhs), safe_divisor<Vec>(load(rhs))), lhs);
+    detail::store(detail::n_div(detail::load(lhs), detail::safe_divisor<Vec>(detail::load(rhs))), lhs);
     return lhs;
 }
 
@@ -545,49 +554,49 @@ template <vector Vec> Vec& operator/=(Vec& lhs, const Vec& rhs) noexcept {
 
 template <vector Vec> Vec operator+(const Vec& lhs, float s) noexcept {
     Vec out{};
-    const auto v = load(lhs);
-    store(n_add(v, n_dup(s, v)), out);
+    const auto v = detail::load(lhs);
+    detail::store(detail::n_add(v, detail::n_dup(s, v)), out);
     return out;
 }
 template <vector Vec> Vec operator-(const Vec& lhs, float s) noexcept {
     Vec out{};
-    const auto v = load(lhs);
-    store(n_sub(v, n_dup(s, v)), out);
+    const auto v = detail::load(lhs);
+    detail::store(detail::n_sub(v, detail::n_dup(s, v)), out);
     return out;
 }
 template <vector Vec> Vec operator*(const Vec& lhs, float s) noexcept {
     Vec out{};
-    store(n_mul_n(load(lhs), s), out);
+    detail::store(detail::n_mul_n(detail::load(lhs), s), out);
     return out;
 }
 
 template <vector Vec> Vec operator/(const Vec& lhs, float s) noexcept {
-    assert(!math::nearly_zero(s));
+    assert(!nearly_zero(s));
     Vec out{};
-    const auto v = load(lhs);
-    store(n_div(v, n_dup(s, v)), out);
+    const auto v = detail::load(lhs);
+    detail::store(detail::n_div(v, detail::n_dup(s, v)), out);
     return out;
 }
 
 template <vector Vec> Vec& operator+=(Vec& lhs, float s) noexcept {
-    const auto v = load(lhs);
-    store(n_add(v, n_dup(s, v)), lhs);
+    const auto v = detail::load(lhs);
+    detail::store(detail::n_add(v, detail::n_dup(s, v)), lhs);
     return lhs;
 }
 template <vector Vec> Vec& operator-=(Vec& lhs, float s) noexcept {
-    const auto v = load(lhs);
-    store(n_sub(v, n_dup(s, v)), lhs);
+    const auto v = detail::load(lhs);
+    detail::store(detail::n_sub(v, detail::n_dup(s, v)), lhs);
     return lhs;
 }
 template <vector Vec> Vec& operator*=(Vec& lhs, float s) noexcept {
-    store(n_mul_n(load(lhs), s), lhs);
+    detail::store(detail::n_mul_n(detail::load(lhs), s), lhs);
     return lhs;
 }
 
 template <vector Vec> Vec& operator/=(Vec& lhs, float s) noexcept {
-    assert(!math::nearly_zero(s));
-    const auto v = load(lhs);
-    store(n_div(v, n_dup(s, v)), lhs);
+    assert(!nearly_zero(s));
+    const auto v = detail::load(lhs);
+    detail::store(detail::n_div(v, detail::n_dup(s, v)), lhs);
     return lhs;
 }
 
@@ -600,16 +609,16 @@ template <vector Vec> Vec operator*(float s, const Vec& rhs) noexcept {
 
 template <vector Vec> Vec operator-(float s, const Vec& rhs) noexcept {
     Vec out{};
-    const auto v = load(rhs);
-    store(n_sub(n_dup(s, v), v), out);
+    const auto v = detail::load(rhs);
+    detail::store(detail::n_sub(detail::n_dup(s, v), v), out);
     return out;
 }
 
 template <vector Vec> Vec operator/(float s, const Vec& rhs) noexcept {
     assert(!any_nearly_zero(rhs));
     Vec out{};
-    const auto v = load(rhs);
-    store(n_div(n_dup(s, v), safe_divisor<Vec>(v)), out);
+    const auto v = detail::load(rhs);
+    detail::store(detail::n_div(detail::n_dup(s, v), detail::safe_divisor<Vec>(v)), out);
     return out;
 }
 
@@ -618,13 +627,13 @@ template <vector Vec> Vec operator/(float s, const Vec& rhs) noexcept {
  * ============================================================ */
 
 template <vector Vec> float dot(const Vec& a, const Vec& b) noexcept {
-    return dot_scalar<Vec>(load(a), load(b));
+    return detail::dot_scalar<Vec>(detail::load(a), detail::load(b));
 }
 template <vector Vec> float length_squared(const Vec& v) noexcept {
     return dot(v, v);
 }
 template <vector Vec> float length(const Vec& v) noexcept {
-    return std::sqrt(dot_scalar<Vec>(load(v), load(v)));
+    return std::sqrt(detail::dot_scalar<Vec>(detail::load(v), detail::load(v)));
 }
 
 /* ============================================================
@@ -632,61 +641,62 @@ template <vector Vec> float length(const Vec& v) noexcept {
  * ============================================================ */
 
 template <vector Vec> void normalize_fast(Vec& vec) noexcept {
-    const auto v = load(vec);
-    store(n_mul(v, n_rsqrte(dot_broadcast<Vec>(v, v))), vec);
+    const auto v = detail::load(vec);
+    detail::store(detail::n_mul(v, detail::n_rsqrte(detail::dot_broadcast<Vec>(v, v))), vec);
 }
 
 template <vector Vec> void normalize(Vec& vec) noexcept {
     assert(!nearly_zero(vec) && "normalizing zero-length vector");
-    const auto v = load(vec);
-    store(n_div(v, n_sqrt(dot_broadcast<Vec>(v, v))), vec);
+    const auto v = detail::load(vec);
+    detail::store(detail::n_div(v, detail::n_sqrt(detail::dot_broadcast<Vec>(v, v))), vec);
 }
 
 template <vector Vec> void normalize_nr(Vec& vec) noexcept {
     assert(!nearly_zero(vec) && "normalizing zero-length vector");
-    const auto v = load(vec);
-    store(n_mul(v, rsqrt_nr(dot_broadcast<Vec>(v, v))), vec);
+    const auto v = detail::load(vec);
+    detail::store(detail::n_mul(v, detail::rsqrt_nr(detail::dot_broadcast<Vec>(v, v))), vec);
 }
 
 template <vector Vec> Vec normalized_fast(const Vec& vec) noexcept {
     assert(!nearly_zero(vec) && "normalizing zero-length vector");
     Vec r{};
-    const auto v = load(vec);
-    store(n_mul(v, n_rsqrte(dot_broadcast<Vec>(v, v))), r);
+    const auto v = detail::load(vec);
+    detail::store(detail::n_mul(v, detail::n_rsqrte(detail::dot_broadcast<Vec>(v, v))), r);
     return r;
 }
 
 template <vector Vec> Vec normalized_nr(const Vec& vec) noexcept {
     assert(!nearly_zero(vec) && "normalizing zero-length vector");
     Vec r{};
-    const auto v = load(vec);
-    store(n_mul(v, rsqrt_nr(dot_broadcast<Vec>(v, v))), r);
+    const auto v = detail::load(vec);
+    detail::store(detail::n_mul(v, detail::rsqrt_nr(detail::dot_broadcast<Vec>(v, v))), r);
     return r;
 }
 
 template <vector Vec> Vec normalized(const Vec& vec) noexcept {
     assert(!nearly_zero(vec) && "normalizing zero-length vector");
     Vec r{};
-    const auto v = load(vec);
-    store(n_div(v, n_sqrt(dot_broadcast<Vec>(v, v))), r);
+    const auto v = detail::load(vec);
+    detail::store(detail::n_div(v, detail::n_sqrt(detail::dot_broadcast<Vec>(v, v))), r);
     return r;
 }
 
+/* @see the AVX `normalize_safe`: exact rather than rsqrt. */
 template <vector Vec> void normalize_safe(Vec& vec) noexcept {
-    const auto v = load(vec);
-    const auto d = dot_broadcast<Vec>(v, v);
-    const auto zero = n_dup(0.0f, v);
-    const auto is_zero = n_cle(d, n_dup(fp32_abs_tol * fp32_abs_tol, v));
-    store(n_bsl(is_zero, zero, n_mul(v, rsqrt_nr(d))), vec);
+    const auto v = detail::load(vec);
+    const auto d = detail::dot_broadcast<Vec>(v, v);
+    const auto zero = detail::n_dup(0.0f, v);
+    const auto is_zero = detail::n_cle(d, detail::n_dup(fp32_abs_tol * fp32_abs_tol, v));
+    detail::store(detail::n_bsl(is_zero, zero, detail::n_div(v, detail::n_sqrt(d))), vec);
 }
 
 template <vector Vec> Vec normalized_safe(const Vec& vec) noexcept {
-    const auto v = load(vec);
-    const auto d = dot_broadcast<Vec>(v, v);
-    const auto zero = n_dup(0.0f, v);
-    const auto is_zero = n_cle(d, n_dup(fp32_abs_tol * fp32_abs_tol, v));
+    const auto v = detail::load(vec);
+    const auto d = detail::dot_broadcast<Vec>(v, v);
+    const auto zero = detail::n_dup(0.0f, v);
+    const auto is_zero = detail::n_cle(d, detail::n_dup(fp32_abs_tol * fp32_abs_tol, v));
     Vec out{};
-    store(n_bsl(is_zero, zero, n_mul(v, rsqrt_nr(d))), out);
+    detail::store(detail::n_bsl(is_zero, zero, detail::n_div(v, detail::n_sqrt(d))), out);
     return out;
 }
 
@@ -695,94 +705,94 @@ template <vector Vec> Vec normalized_safe(const Vec& vec) noexcept {
  * ============================================================ */
 
 template <vector Vec> Vec project(const Vec& v, const Vec& onto) noexcept {
-    const auto vv = load(v);
-    const auto nn = load(onto);
+    const auto vv = detail::load(v);
+    const auto nn = detail::load(onto);
     Vec out{};
-    store(n_mul(dot_broadcast<Vec>(vv, nn), nn), out);
+    detail::store(detail::n_mul(detail::dot_broadcast<Vec>(vv, nn), nn), out);
     return out;
 }
 
 template <vector Vec> Vec reflect(const Vec& v, const Vec& normal) noexcept {
-    const auto vv = load(v);
-    const auto nn = load(normal);
-    const auto d = dot_broadcast<Vec>(vv, nn);
+    const auto vv = detail::load(v);
+    const auto nn = detail::load(normal);
+    const auto d = detail::dot_broadcast<Vec>(vv, nn);
     Vec out{};
-    store(n_sub(vv, n_mul(n_add(d, d), nn)), out);
+    detail::store(detail::n_sub(vv, detail::n_mul(detail::n_add(d, d), nn)), out);
     return out;
 }
 
 template <vector Vec> Vec min(const Vec& a, const Vec& b) noexcept {
     Vec out{};
-    store(n_min(load(a), load(b)), out);
+    detail::store(detail::n_min(detail::load(a), detail::load(b)), out);
     return out;
 }
 template <vector Vec> Vec max(const Vec& a, const Vec& b) noexcept {
     Vec out{};
-    store(n_max(load(a), load(b)), out);
+    detail::store(detail::n_max(detail::load(a), detail::load(b)), out);
     return out;
 }
 template <vector Vec> Vec abs(const Vec& v) noexcept {
     Vec out{};
-    store(n_abs(load(v)), out);
+    detail::store(detail::n_abs(detail::load(v)), out);
     return out;
 }
 
 template <vector Vec> Vec clamp(const Vec& v, const Vec& lo, const Vec& hi) noexcept {
     Vec out{};
-    store(n_min(n_max(load(v), load(lo)), load(hi)), out);
+    detail::store(detail::n_min(detail::n_max(detail::load(v), detail::load(lo)), detail::load(hi)), out);
     return out;
 }
 
 template <vector Vec> Vec clamp(const Vec& v, float lo, float hi) noexcept {
-    const auto lv = load(v);
+    const auto lv = detail::load(v);
     Vec out{};
-    store(n_min(n_max(lv, n_dup(lo, lv)), n_dup(hi, lv)), out);
+    detail::store(detail::n_min(detail::n_max(lv, detail::n_dup(lo, lv)), detail::n_dup(hi, lv)), out);
     return out;
 }
 
 template <vector Vec> Vec lerp(const Vec& a, const Vec& b, float t) noexcept {
-    const auto va = load(a);
+    const auto va = detail::load(a);
     Vec out{};
-    store(n_fma_n(va, n_sub(load(b), va), t), out);
+    detail::store(detail::n_fma_n(va, detail::n_sub(detail::load(b), va), t), out);
     return out;
 }
 
 template <vector Vec> float distance_squared(const Vec& a, const Vec& b) noexcept {
-    const auto d = n_sub(load(a), load(b));
-    return dot_scalar<Vec>(d, d);
+    const auto d = detail::n_sub(detail::load(a), detail::load(b));
+    return detail::dot_scalar<Vec>(d, d);
 }
 
 template <vector Vec> float distance(const Vec& a, const Vec& b) noexcept {
-    const auto d = n_sub(load(a), load(b));
-    return std::sqrt(dot_scalar<Vec>(d, d));
+    const auto d = detail::n_sub(detail::load(a), detail::load(b));
+    return std::sqrt(detail::dot_scalar<Vec>(d, d));
 }
 
 template <vector Vec> bool is_perpendicular(const Vec& a, const Vec& b, float tol = fp32_abs_tol) noexcept {
-    return std::abs(dot_scalar<Vec>(load(a), load(b))) <= tol;
+    return std::abs(detail::dot_scalar<Vec>(detail::load(a), detail::load(b))) <= tol;
 }
 
 template <vector Vec> bool is_parallel(const Vec& a, const Vec& b, float tol = fp32_rel_tol) noexcept {
-    const auto va = load(a);
-    const auto vb = load(b);
-    const auto ab = dot_scalar<Vec>(va, vb);
-    const auto aa = dot_scalar<Vec>(va, va);
-    const auto bb = dot_scalar<Vec>(vb, vb);
+    const auto va = detail::load(a);
+    const auto vb = detail::load(b);
+    const auto ab = detail::dot_scalar<Vec>(va, vb);
+    const auto aa = detail::dot_scalar<Vec>(va, va);
+    const auto bb = detail::dot_scalar<Vec>(vb, vb);
     return std::abs(ab * ab - aa * bb) <= tol * aa * bb;
 }
 
 template <vector Vec> bool all_greater_than(const Vec& a, const Vec& b) noexcept {
-    constexpr auto mask{lane_mask<Vec>()};
-    return (n_movemask(n_cgt(load(a), load(b))) & mask) == mask;
+    constexpr auto mask{detail::lane_mask<Vec>()};
+    return (detail::n_movemask(detail::n_cgt(detail::load(a), detail::load(b))) & mask) == mask;
 }
 
 template <vector Vec> bool all_less_than(const Vec& a, const Vec& b) noexcept {
-    constexpr auto mask{lane_mask<Vec>()};
-    return (n_movemask(n_clt(load(a), load(b))) & mask) == mask;
+    constexpr auto mask{detail::lane_mask<Vec>()};
+    return (detail::n_movemask(detail::n_clt(detail::load(a), detail::load(b))) & mask) == mask;
 }
 
 template <vector Vec> bool any_greater_than(const Vec& a, const Vec& b) noexcept {
-    constexpr auto mask{lane_mask<Vec>()};
-    return static_cast<bool>(n_movemask(n_cgt(load(a), load(b))) & mask);
+    constexpr auto mask{detail::lane_mask<Vec>()};
+    return static_cast<bool>(detail::n_movemask(detail::n_cgt(detail::load(a), detail::load(b))) & mask);
 }
 
 inline bool contains(const box3d& box, const vec3& point) {
@@ -795,8 +805,8 @@ inline bool contains(const box3d& box, const vec3& point) {
 
 /* vec2: a.x*b.y - a.y*b.x, native D-form */
 inline float cross(const vec2& a, const vec2& b) noexcept {
-    float32x2_t va = load(a);
-    float32x2_t vb = load(b);
+    float32x2_t va = detail::load(a);
+    float32x2_t vb = detail::load(b);
     float32x2_t b_yx = vrev64_f32(vb);    /* {b.y, b.x} */
     float32x2_t mul = vmul_f32(va, b_yx); /* {a.x*b.y, a.y*b.x} */
     return vget_lane_f32(mul, 0) - vget_lane_f32(mul, 1);
@@ -804,13 +814,13 @@ inline float cross(const vec2& a, const vec2& b) noexcept {
 
 /* vec3 cross product */
 inline vec3 cross(const vec3& a, const vec3& b) noexcept {
-    const float32x4_t va = load(a);
-    const float32x4_t vb = load(b);
+    const float32x4_t va = detail::load(a);
+    const float32x4_t vb = detail::load(b);
     const float32x4_t a_yzx = __builtin_shufflevector(va, va, 1, 2, 0, 3);
     const float32x4_t b_yzx = __builtin_shufflevector(vb, vb, 1, 2, 0, 3);
     const float32x4_t result = vfmsq_f32(vmulq_f32(va, b_yzx), a_yzx, vb);
     vec3 out{};
-    store(__builtin_shufflevector(result, result, 1, 2, 0, 3), out);
+    detail::store(__builtin_shufflevector(result, result, 1, 2, 0, 3), out);
     return out;
 }
 
@@ -823,15 +833,15 @@ template <> inline bool is_parallel<vec3>(const vec3& a, const vec3& b, float to
 
 /* vec2 perpendicular: {-y, x}, D-form */
 inline vec2 perpendicular(const vec2& v) noexcept {
-    float32x2_t loaded = load(v);
+    float32x2_t loaded = detail::load(v);
     float32x2_t yx = vrev64_f32(loaded); /* {y, x} */
     vec2 out{};
-    store(vset_lane_f32(-vget_lane_f32(yx, 0), yx, 0), out);
+    detail::store(vset_lane_f32(-vget_lane_f32(yx, 0), yx, 0), out);
     return out;
 }
 
 inline vec3 perpendicular(const vec3& v) noexcept {
-    float32x4_t av = vabsq_f32(load(v));
+    float32x4_t av = vabsq_f32(detail::load(v));
     const float ax{vgetq_lane_f32(av, 0)};
     const float ay{vgetq_lane_f32(av, 1)};
     const float az{vgetq_lane_f32(av, 2)};
@@ -845,9 +855,9 @@ inline vec3 perpendicular(const vec3& v) noexcept {
 }
 
 template <vector Vec> float angle_between(const Vec& a, const Vec& b) noexcept {
-    const auto va = load(a);
-    const auto vb = load(b);
-    auto ct = dot_scalar<Vec>(va, vb) / std::sqrt(dot_scalar<Vec>(va, va) * dot_scalar<Vec>(vb, vb));
+    const auto va = detail::load(a);
+    const auto vb = detail::load(b);
+    auto ct = detail::dot_scalar<Vec>(va, vb) / std::sqrt(detail::dot_scalar<Vec>(va, va) * detail::dot_scalar<Vec>(vb, vb));
     return std::acos(std::max(-1.0f, std::min(ct, 1.0f)));
 }
 
@@ -856,132 +866,132 @@ template <vector Vec> float angle_between(const Vec& a, const Vec& b) noexcept {
  * ============================================================ */
 
 template <box_type Box> bool is_valid(const Box& b) noexcept {
-    box_reg_t<Box> lo, hi;
-    load_min_max(b, lo, hi);
-    constexpr auto mask = box_traits<Box>::lane_mask;
-    return (n_movemask(n_cle(lo, hi)) & mask) == mask;
+    detail::box_reg_t<Box> lo, hi;
+    detail::load_min_max(b, lo, hi);
+    constexpr auto mask = detail::box_traits<Box>::lane_mask;
+    return (detail::n_movemask(detail::n_cle(lo, hi)) & mask) == mask;
 }
 
-template <box_type Box> box_vec_t<Box> center(const Box& b) noexcept {
-    box_reg_t<Box> lo, hi;
-    load_min_max(b, lo, hi);
-    box_vec_t<Box> out{};
-    store(n_mul_n(n_add(lo, hi), 0.5f), out);
+template <box_type Box> detail::box_vec_t<Box> center(const Box& b) noexcept {
+    detail::box_reg_t<Box> lo, hi;
+    detail::load_min_max(b, lo, hi);
+    detail::box_vec_t<Box> out{};
+    detail::store(detail::n_mul_n(detail::n_add(lo, hi), 0.5f), out);
     return out;
 }
 
-template <box_type Box> box_vec_t<Box> half_extents(const Box& b) noexcept {
-    box_reg_t<Box> lo, hi;
-    load_min_max(b, lo, hi);
-    box_vec_t<Box> out{};
-    store(n_mul_n(n_sub(hi, lo), 0.5f), out);
+template <box_type Box> detail::box_vec_t<Box> half_extents(const Box& b) noexcept {
+    detail::box_reg_t<Box> lo, hi;
+    detail::load_min_max(b, lo, hi);
+    detail::box_vec_t<Box> out{};
+    detail::store(detail::n_mul_n(detail::n_sub(hi, lo), 0.5f), out);
     return out;
 }
 
-template <box_type Box> box_vec_t<Box> extents(const Box& b) noexcept {
-    box_reg_t<Box> lo, hi;
-    load_min_max(b, lo, hi);
-    box_vec_t<Box> out{};
-    store(n_sub(hi, lo), out);
+template <box_type Box> detail::box_vec_t<Box> extents(const Box& b) noexcept {
+    detail::box_reg_t<Box> lo, hi;
+    detail::load_min_max(b, lo, hi);
+    detail::box_vec_t<Box> out{};
+    detail::store(detail::n_sub(hi, lo), out);
     return out;
 }
 
-template <box_type Box> Box translate(const Box& b, const box_vec_t<Box>& offset) noexcept {
-    box_reg_t<Box> lo, hi;
-    load_min_max(b, lo, hi);
-    const auto o = load(offset);
-    return make_box<Box>(n_add(lo, o), n_add(hi, o));
+template <box_type Box> Box translate(const Box& b, const detail::box_vec_t<Box>& offset) noexcept {
+    detail::box_reg_t<Box> lo, hi;
+    detail::load_min_max(b, lo, hi);
+    const auto o = detail::load(offset);
+    return detail::make_box<Box>(detail::n_add(lo, o), detail::n_add(hi, o));
 }
 
-template <box_type Box> Box scale_about_origin(const Box& b, const box_vec_t<Box>& s) noexcept {
-    box_reg_t<Box> lo, hi;
-    load_min_max(b, lo, hi);
-    const auto sv = load(s);
-    return make_box<Box>(n_mul(lo, sv), n_mul(hi, sv));
+template <box_type Box> Box scale_about_origin(const Box& b, const detail::box_vec_t<Box>& s) noexcept {
+    detail::box_reg_t<Box> lo, hi;
+    detail::load_min_max(b, lo, hi);
+    const auto sv = detail::load(s);
+    return detail::make_box<Box>(detail::n_mul(lo, sv), detail::n_mul(hi, sv));
 }
 
 template <box_type Box> Box scale_uniform(const Box& b, float s) noexcept {
-    box_reg_t<Box> lo, hi;
-    load_min_max(b, lo, hi);
-    return make_box<Box>(n_mul_n(lo, s), n_mul_n(hi, s));
+    detail::box_reg_t<Box> lo, hi;
+    detail::load_min_max(b, lo, hi);
+    return detail::make_box<Box>(detail::n_mul_n(lo, s), detail::n_mul_n(hi, s));
 }
 
 template <box_type Box> Box dilate(const Box& b, float amount) noexcept {
-    box_reg_t<Box> lo, hi;
-    load_min_max(b, lo, hi);
-    const auto a = n_dup(amount, lo);
-    return make_box<Box>(n_sub(lo, a), n_add(hi, a));
+    detail::box_reg_t<Box> lo, hi;
+    detail::load_min_max(b, lo, hi);
+    const auto a = detail::n_dup(amount, lo);
+    return detail::make_box<Box>(detail::n_sub(lo, a), detail::n_add(hi, a));
 }
 
-template <box_type Box> Box dilate(const Box& b, const box_vec_t<Box>& amount) noexcept {
-    box_reg_t<Box> lo, hi;
-    load_min_max(b, lo, hi);
-    const auto a = load(amount);
-    return make_box<Box>(n_sub(lo, a), n_add(hi, a));
+template <box_type Box> Box dilate(const Box& b, const detail::box_vec_t<Box>& amount) noexcept {
+    detail::box_reg_t<Box> lo, hi;
+    detail::load_min_max(b, lo, hi);
+    const auto a = detail::load(amount);
+    return detail::make_box<Box>(detail::n_sub(lo, a), detail::n_add(hi, a));
 }
 
 template <box_type Box> bool overlaps(const Box& a, const Box& b) noexcept {
-    box_reg_t<Box> a_lo, a_hi, b_lo, b_hi;
-    load_min_max(a, a_lo, a_hi);
-    load_min_max(b, b_lo, b_hi);
-    constexpr auto mask = box_traits<Box>::lane_mask;
-    return !((n_movemask(n_cgt(a_lo, b_hi)) | n_movemask(n_cgt(b_lo, a_hi))) & mask);
+    detail::box_reg_t<Box> a_lo, a_hi, b_lo, b_hi;
+    detail::load_min_max(a, a_lo, a_hi);
+    detail::load_min_max(b, b_lo, b_hi);
+    constexpr auto mask = detail::box_traits<Box>::lane_mask;
+    return !((detail::n_movemask(detail::n_cgt(a_lo, b_hi)) | detail::n_movemask(detail::n_cgt(b_lo, a_hi))) & mask);
 }
 
 template <box_type Box> bool contains(const Box& outer, const Box& inner) noexcept {
-    box_reg_t<Box> o_lo, o_hi, i_lo, i_hi;
-    load_min_max(outer, o_lo, o_hi);
-    load_min_max(inner, i_lo, i_hi);
-    constexpr auto mask = box_traits<Box>::lane_mask;
-    return ((n_movemask(n_cle(o_lo, i_lo)) & n_movemask(n_cle(i_hi, o_hi))) & mask) == mask;
+    detail::box_reg_t<Box> o_lo, o_hi, i_lo, i_hi;
+    detail::load_min_max(outer, o_lo, o_hi);
+    detail::load_min_max(inner, i_lo, i_hi);
+    constexpr auto mask = detail::box_traits<Box>::lane_mask;
+    return ((detail::n_movemask(detail::n_cle(o_lo, i_lo)) & detail::n_movemask(detail::n_cle(i_hi, o_hi))) & mask) == mask;
 }
 
-template <box_type Box> bool contains_point(const Box& b, const box_vec_t<Box>& p) noexcept {
-    box_reg_t<Box> lo, hi;
-    load_min_max(b, lo, hi);
-    const auto pv = load(p);
-    constexpr auto mask = box_traits<Box>::lane_mask;
-    return ((n_movemask(n_cle(lo, pv)) & n_movemask(n_cle(pv, hi))) & mask) == mask;
+template <box_type Box> bool contains_point(const Box& b, const detail::box_vec_t<Box>& p) noexcept {
+    detail::box_reg_t<Box> lo, hi;
+    detail::load_min_max(b, lo, hi);
+    const auto pv = detail::load(p);
+    constexpr auto mask = detail::box_traits<Box>::lane_mask;
+    return ((detail::n_movemask(detail::n_cle(lo, pv)) & detail::n_movemask(detail::n_cle(pv, hi))) & mask) == mask;
 }
 
 template <box_type Box> Box intersection(const Box& a, const Box& b) noexcept {
-    box_reg_t<Box> a_lo, a_hi, b_lo, b_hi;
-    load_min_max(a, a_lo, a_hi);
-    load_min_max(b, b_lo, b_hi);
-    return make_box<Box>(n_max(a_lo, b_lo), n_min(a_hi, b_hi));
+    detail::box_reg_t<Box> a_lo, a_hi, b_lo, b_hi;
+    detail::load_min_max(a, a_lo, a_hi);
+    detail::load_min_max(b, b_lo, b_hi);
+    return detail::make_box<Box>(detail::n_max(a_lo, b_lo), detail::n_min(a_hi, b_hi));
 }
 
 template <box_type Box> Box merge(const Box& a, const Box& b) noexcept {
-    box_reg_t<Box> a_lo, a_hi, b_lo, b_hi;
-    load_min_max(a, a_lo, a_hi);
-    load_min_max(b, b_lo, b_hi);
-    return make_box<Box>(n_min(a_lo, b_lo), n_max(a_hi, b_hi));
+    detail::box_reg_t<Box> a_lo, a_hi, b_lo, b_hi;
+    detail::load_min_max(a, a_lo, a_hi);
+    detail::load_min_max(b, b_lo, b_hi);
+    return detail::make_box<Box>(detail::n_min(a_lo, b_lo), detail::n_max(a_hi, b_hi));
 }
 
-template <box_type Box> Box expand(const Box& b, const box_vec_t<Box>& p) noexcept {
-    box_reg_t<Box> lo, hi;
-    load_min_max(b, lo, hi);
-    const auto pv = load(p);
-    return make_box<Box>(n_min(lo, pv), n_max(hi, pv));
+template <box_type Box> Box expand(const Box& b, const detail::box_vec_t<Box>& p) noexcept {
+    detail::box_reg_t<Box> lo, hi;
+    detail::load_min_max(b, lo, hi);
+    const auto pv = detail::load(p);
+    return detail::make_box<Box>(detail::n_min(lo, pv), detail::n_max(hi, pv));
 }
 
-template <box_type Box> float distance_squared(const Box& b, const box_vec_t<Box>& p) noexcept {
-    box_reg_t<Box> lo, hi;
-    load_min_max(b, lo, hi);
-    const auto pv = load(p);
-    const auto diff = n_sub(pv, n_min(n_max(pv, lo), hi));
-    return box_dot_scalar<Box>(diff, diff);
+template <box_type Box> float distance_squared(const Box& b, const detail::box_vec_t<Box>& p) noexcept {
+    detail::box_reg_t<Box> lo, hi;
+    detail::load_min_max(b, lo, hi);
+    const auto pv = detail::load(p);
+    const auto diff = detail::n_sub(pv, detail::n_min(detail::n_max(pv, lo), hi));
+    return detail::box_dot_scalar<Box>(diff, diff);
 }
 
-template <box_type Box> float distance(const Box& b, const box_vec_t<Box>& p) noexcept {
+template <box_type Box> float distance(const Box& b, const detail::box_vec_t<Box>& p) noexcept {
     return std::sqrt(distance_squared(b, p));
 }
 
-template <box_type Box> box_vec_t<Box> closest_point(const Box& b, const box_vec_t<Box>& p) noexcept {
-    box_reg_t<Box> lo, hi;
-    load_min_max(b, lo, hi);
-    box_vec_t<Box> out{};
-    store(n_min(n_max(load(p), lo), hi), out);
+template <box_type Box> detail::box_vec_t<Box> closest_point(const Box& b, const detail::box_vec_t<Box>& p) noexcept {
+    detail::box_reg_t<Box> lo, hi;
+    detail::load_min_max(b, lo, hi);
+    detail::box_vec_t<Box> out{};
+    detail::store(detail::n_min(detail::n_max(detail::load(p), lo), hi), out);
     return out;
 }
 
@@ -990,7 +1000,7 @@ template <box_type Box> box_vec_t<Box> closest_point(const Box& b, const box_vec
  * ============================================================ */
 
 inline box2d box2d_from_center_half(const vec2& c, const vec2& half_ext) noexcept {
-    float32x2_t cv = load(c), hv = load(half_ext);
+    float32x2_t cv = detail::load(c), hv = detail::load(half_ext);
     box2d b{};
     vst1_f32(&b.min.x, vsub_f32(cv, hv));
     vst1_f32(&b.max.x, vadd_f32(cv, hv));
@@ -998,7 +1008,7 @@ inline box2d box2d_from_center_half(const vec2& c, const vec2& half_ext) noexcep
 }
 
 inline box2d box2d_from_point(const vec2& p) noexcept {
-    float32x2_t v = load(p);
+    float32x2_t v = detail::load(p);
     box2d b{};
     vst1_f32(&b.min.x, v);
     vst1_f32(&b.max.x, v);
@@ -1021,7 +1031,7 @@ inline float perimeter(const box2d& b) noexcept {
  * ============================================================ */
 
 inline box3d box3d_from_center_half(const vec3& c, const vec3& half_ext) noexcept {
-    float32x4_t cv = load(c), hv = load(half_ext);
+    float32x4_t cv = detail::load(c), hv = detail::load(half_ext);
     box3d b{};
     vst1q_f32(&b.min.x, vsubq_f32(cv, hv));
     vst1q_f32(&b.max.x, vaddq_f32(cv, hv));
@@ -1029,7 +1039,7 @@ inline box3d box3d_from_center_half(const vec3& c, const vec3& half_ext) noexcep
 }
 
 inline box3d box3d_from_point(const vec3& p) noexcept {
-    float32x4_t v = load(p);
+    float32x4_t v = detail::load(p);
     box3d b{};
     vst1q_f32(&b.min.x, v);
     vst1q_f32(&b.max.x, v);
@@ -1054,46 +1064,47 @@ inline float surface_area(const box3d& b) noexcept {
 
 inline mat4 mat4_diagonal(float d) noexcept {
     float32x4_t z = vdupq_n_f32(0.0f);
-    return store_cols(vsetq_lane_f32(d, z, 0), vsetq_lane_f32(d, z, 1), vsetq_lane_f32(d, z, 2), vsetq_lane_f32(d, z, 3));
+    return detail::store_cols(vsetq_lane_f32(d, z, 0), vsetq_lane_f32(d, z, 1), vsetq_lane_f32(d, z, 2), vsetq_lane_f32(d, z, 3));
 }
 
 inline mat4 add(const mat4& a, const mat4& b) noexcept {
-    return store_cols(vaddq_f32(vld1q_f32(&a.cols[0].x), vld1q_f32(&b.cols[0].x)), vaddq_f32(vld1q_f32(&a.cols[1].x), vld1q_f32(&b.cols[1].x)),
+    return detail::store_cols(vaddq_f32(vld1q_f32(&a.cols[0].x), vld1q_f32(&b.cols[0].x)), vaddq_f32(vld1q_f32(&a.cols[1].x), vld1q_f32(&b.cols[1].x)),
         vaddq_f32(vld1q_f32(&a.cols[2].x), vld1q_f32(&b.cols[2].x)), vaddq_f32(vld1q_f32(&a.cols[3].x), vld1q_f32(&b.cols[3].x)));
 }
 
 inline mat4 sub(const mat4& a, const mat4& b) noexcept {
-    return store_cols(vsubq_f32(vld1q_f32(&a.cols[0].x), vld1q_f32(&b.cols[0].x)), vsubq_f32(vld1q_f32(&a.cols[1].x), vld1q_f32(&b.cols[1].x)),
+    return detail::store_cols(vsubq_f32(vld1q_f32(&a.cols[0].x), vld1q_f32(&b.cols[0].x)), vsubq_f32(vld1q_f32(&a.cols[1].x), vld1q_f32(&b.cols[1].x)),
         vsubq_f32(vld1q_f32(&a.cols[2].x), vld1q_f32(&b.cols[2].x)), vsubq_f32(vld1q_f32(&a.cols[3].x), vld1q_f32(&b.cols[3].x)));
 }
 
 inline mat4 scale(const mat4& m, float s) noexcept {
     float32x4_t sv = vdupq_n_f32(s);
-    return store_cols(vmulq_f32(vld1q_f32(&m.cols[0].x), sv), vmulq_f32(vld1q_f32(&m.cols[1].x), sv), vmulq_f32(vld1q_f32(&m.cols[2].x), sv),
+    return detail::store_cols(vmulq_f32(vld1q_f32(&m.cols[0].x), sv), vmulq_f32(vld1q_f32(&m.cols[1].x), sv), vmulq_f32(vld1q_f32(&m.cols[2].x), sv),
         vmulq_f32(vld1q_f32(&m.cols[3].x), sv));
 }
 
 inline mat4 negate(const mat4& m) noexcept {
-    return store_cols(
+    return detail::store_cols(
         vnegq_f32(vld1q_f32(&m.cols[0].x)), vnegq_f32(vld1q_f32(&m.cols[1].x)), vnegq_f32(vld1q_f32(&m.cols[2].x)), vnegq_f32(vld1q_f32(&m.cols[3].x)));
 }
 
 inline mat4 operator*(const mat4& a, const mat4& b) noexcept {
-    const auto l = load_cols(a);
-    const auto r = load_cols(b);
-    return store_cols(linear_combine(l, r.c[0]), linear_combine(l, r.c[1]), linear_combine(l, r.c[2]), linear_combine(l, r.c[3]));
+    const auto l = detail::load_cols(a);
+    const auto r = detail::load_cols(b);
+    return detail::store_cols(
+        detail::linear_combine(l, r.c[0]), detail::linear_combine(l, r.c[1]), detail::linear_combine(l, r.c[2]), detail::linear_combine(l, r.c[3]));
 }
 
 inline vec4 operator*(const mat4& m, const vec4& v) noexcept {
     vec4 out{};
-    vst1q_f32(&out.x, linear_combine(load_cols(m), vld1q_f32(&v.x)));
+    vst1q_f32(&out.x, detail::linear_combine(detail::load_cols(m), vld1q_f32(&v.x)));
     return out;
 }
 
 inline vec3 operator*(const mat4& m, const vec3& p) noexcept {
     float32x4_t v = vsetq_lane_f32(1.0f, vld1q_f32(&p.x), 3);
     vec3 out{};
-    vst1q_f32(&out.x, linear_combine(load_cols(m), v));
+    vst1q_f32(&out.x, detail::linear_combine(detail::load_cols(m), v));
     return out;
 }
 
@@ -1107,14 +1118,16 @@ inline vec3 transform_point(const mat4& m, const vec3& p) noexcept {
 
 inline vec3 transform_dir(const mat4& m, const vec3& d) noexcept {
     vec3 out{};
-    vst1q_f32(&out.x, linear_combine(load_cols(m), vld1q_f32(&d.x)));
+    /* @see the AVX `transform_dir`. */
+    vst1q_f32(&out.x, detail::linear_combine(detail::load_cols(m), detail::clear_pad(vld1q_f32(&d.x))));
     return out;
 }
 
 inline mat4 transpose(const mat4& m) noexcept {
     float32x4_t c0 = vld1q_f32(&m.cols[0].x), c1 = vld1q_f32(&m.cols[1].x), c2 = vld1q_f32(&m.cols[2].x), c3 = vld1q_f32(&m.cols[3].x);
     float32x4_t lo01 = vzip1q_f32(c0, c1), hi01 = vzip2q_f32(c0, c1), lo23 = vzip1q_f32(c2, c3), hi23 = vzip2q_f32(c2, c3);
-    return store_cols(combine_low(lo01, lo23), combine_high(lo01, lo23), combine_low(hi01, hi23), combine_high(hi01, hi23));
+    return detail::store_cols(
+        detail::combine_low(lo01, lo23), detail::combine_high(lo01, lo23), detail::combine_low(hi01, hi23), detail::combine_high(hi01, hi23));
 }
 
 inline float trace(const mat4& m) noexcept {
@@ -1122,12 +1135,12 @@ inline float trace(const mat4& m) noexcept {
 }
 
 inline float determinant(const mat4& m) noexcept {
-    const auto [s0, s1, s2, s3, s4, s5, t0, t1, t2, t3, t4, t5] = compute_sub_dets(m);
+    const auto [s0, s1, s2, s3, s4, s5, t0, t1, t2, t3, t4, t5] = detail::compute_sub_dets(m);
     return s0 * t5 - s1 * t4 + s2 * t3 + s3 * t2 - s4 * t1 + s5 * t0;
 }
 
 inline mat4 inverse(const mat4& m) noexcept {
-    const auto [s0, s1, s2, s3, s4, s5, t0, t1, t2, t3, t4, t5] = compute_sub_dets(m);
+    const auto [s0, s1, s2, s3, s4, s5, t0, t1, t2, t3, t4, t5] = detail::compute_sub_dets(m);
     const auto det = s0 * t5 - s1 * t4 + s2 * t3 + s3 * t2 - s4 * t1 + s5 * t0;
     const auto id = 1.0f / det;
     const auto& c = m.cols;
@@ -1147,54 +1160,50 @@ inline mat4 inverse_rigid(const mat4& m) noexcept {
     float32x4_t c0 = vld1q_f32(&m.cols[0].x), c1 = vld1q_f32(&m.cols[1].x), c2 = vld1q_f32(&m.cols[2].x), c3 = vld1q_f32(&m.cols[3].x);
     float32x4_t z = vdupq_n_f32(0.0f);
     float32x4_t lo01 = vzip1q_f32(c0, c1), lo2z = vzip1q_f32(c2, z), hi01 = vzip2q_f32(c0, c1);
-    float32x4_t r0 = combine_low(lo01, lo2z), r1 = combine_high(lo01, lo2z), r2 = combine_low(hi01, vzip2q_f32(c2, z));
+    float32x4_t r0 = detail::combine_low(lo01, lo2z), r1 = detail::combine_high(lo01, lo2z), r2 = detail::combine_low(hi01, vzip2q_f32(c2, z));
     float32x4_t neg_t = vnegq_f32(c3);
-    float32x4_t new_t = {dot_scalar_3(r0, neg_t), dot_scalar_3(r1, neg_t), dot_scalar_3(r2, neg_t), 1.0f};
-    return store_cols(r0, r1, r2, new_t);
+    float32x4_t new_t = {detail::dot_scalar_3(r0, neg_t), detail::dot_scalar_3(r1, neg_t), detail::dot_scalar_3(r2, neg_t), 1.0f};
+    return detail::store_cols(r0, r1, r2, new_t);
 }
 
 inline mat4 inverse_affine_uniform(const mat4& m) noexcept {
     float32x4_t c0 = vld1q_f32(&m.cols[0].x), c1 = vld1q_f32(&m.cols[1].x), c2 = vld1q_f32(&m.cols[2].x), c3 = vld1q_f32(&m.cols[3].x);
-    float32x4_t inv_s2 = vdupq_n_f32(1.0f / dot_scalar_3(c0, c0)), z = vdupq_n_f32(0.0f);
+    float32x4_t inv_s2 = vdupq_n_f32(1.0f / detail::dot_scalar_3(c0, c0)), z = vdupq_n_f32(0.0f);
     float32x4_t lo01 = vzip1q_f32(c0, c1), lo2z = vzip1q_f32(c2, z), hi01 = vzip2q_f32(c0, c1);
-    float32x4_t r0 = vmulq_f32(combine_low(lo01, lo2z), inv_s2), r1 = vmulq_f32(combine_high(lo01, lo2z), inv_s2),
-                r2 = vmulq_f32(combine_low(hi01, vzip2q_f32(c2, z)), inv_s2);
+    float32x4_t r0 = vmulq_f32(detail::combine_low(lo01, lo2z), inv_s2), r1 = vmulq_f32(detail::combine_high(lo01, lo2z), inv_s2),
+                r2 = vmulq_f32(detail::combine_low(hi01, vzip2q_f32(c2, z)), inv_s2);
     float32x4_t neg_t = vnegq_f32(c3);
-    float32x4_t new_t = {dot_scalar_3(r0, neg_t), dot_scalar_3(r1, neg_t), dot_scalar_3(r2, neg_t), 1.0f};
-    return store_cols(r0, r1, r2, new_t);
+    float32x4_t new_t = {detail::dot_scalar_3(r0, neg_t), detail::dot_scalar_3(r1, neg_t), detail::dot_scalar_3(r2, neg_t), 1.0f};
+    return detail::store_cols(r0, r1, r2, new_t);
 }
 
 /* ============================================================
  * mat2 operations
  * ============================================================ */
 
-inline float32x4_t load(const mat2& m) noexcept {
-    return vld1q_f32(&m.cols[0].x);
-}
-
 inline mat2 add(const mat2& a, const mat2& b) noexcept {
     mat2 r{};
-    vst1q_f32(&r.cols[0].x, vaddq_f32(load(a), load(b)));
+    vst1q_f32(&r.cols[0].x, vaddq_f32(detail::load(a), detail::load(b)));
     return r;
 }
 inline mat2 sub(const mat2& a, const mat2& b) noexcept {
     mat2 r{};
-    vst1q_f32(&r.cols[0].x, vsubq_f32(load(a), load(b)));
+    vst1q_f32(&r.cols[0].x, vsubq_f32(detail::load(a), detail::load(b)));
     return r;
 }
 inline mat2 scale(const mat2& m, float s) noexcept {
     mat2 r{};
-    vst1q_f32(&r.cols[0].x, vmulq_n_f32(load(m), s));
+    vst1q_f32(&r.cols[0].x, vmulq_n_f32(detail::load(m), s));
     return r;
 }
 inline mat2 negate(const mat2& m) noexcept {
     mat2 r{};
-    vst1q_f32(&r.cols[0].x, vnegq_f32(load(m)));
+    vst1q_f32(&r.cols[0].x, vnegq_f32(detail::load(m)));
     return r;
 }
 
 inline mat2 operator*(const mat2& lhs, const mat2& rhs) noexcept {
-    float32x4_t l = load(lhs), r = load(rhs);
+    float32x4_t l = detail::load(lhs), r = detail::load(rhs);
     float32x4_t ac_ac = vcombine_f32(vget_low_f32(l), vget_low_f32(l));
     float32x4_t bd_bd = vcombine_f32(vget_high_f32(l), vget_high_f32(l));
     mat2 result{};
@@ -1203,27 +1212,27 @@ inline mat2 operator*(const mat2& lhs, const mat2& rhs) noexcept {
 }
 
 inline vec2 transform_vec2(const mat2& m, const vec2& v) noexcept {
-    float32x4_t mv = load(m);
-    float32x2_t vv = load(v);
+    float32x4_t mv = detail::load(m);
+    float32x2_t vv = detail::load(v);
     float32x2_t ac = vget_low_f32(mv), bd = vget_high_f32(mv);
     vec2 out{};
-    store(vfma_f32(vmul_f32(ac, vdup_lane_f32(vv, 0)), bd, vdup_lane_f32(vv, 1)), out);
+    detail::store(vfma_f32(vmul_f32(ac, vdup_lane_f32(vv, 0)), bd, vdup_lane_f32(vv, 1)), out);
     return out;
 }
 
 inline mat2 transpose(const mat2& m) noexcept {
     mat2 r{};
-    vst1q_f32(&r.cols[0].x, __builtin_shufflevector(load(m), load(m), 0, 2, 1, 3));
+    vst1q_f32(&r.cols[0].x, __builtin_shufflevector(detail::load(m), detail::load(m), 0, 2, 1, 3));
     return r;
 }
 
 inline float determinant(const mat2& m) noexcept {
-    float32x4_t v = load(m);
+    float32x4_t v = detail::load(m);
     return vgetq_lane_f32(v, 0) * vgetq_lane_f32(v, 3) - vgetq_lane_f32(v, 2) * vgetq_lane_f32(v, 1);
 }
 
 inline mat2 inverse(const mat2& m) noexcept {
-    float32x4_t v = load(m);
+    float32x4_t v = detail::load(m);
     float a = vgetq_lane_f32(v, 0), c = vgetq_lane_f32(v, 1), b = vgetq_lane_f32(v, 2), d = vgetq_lane_f32(v, 3);
     float id = 1.0f / (a * d - b * c);
     float32x4_t adj = {d * id, -c * id, -b * id, a * id};
@@ -1248,24 +1257,19 @@ inline mat3 to_mat3(const mat4& m) noexcept {
     return r;
 }
 
-/* @see the AVX `clear_pad`. */
-inline float32x4_t clear_pad(const float32x4_t v) noexcept {
-    return vsetq_lane_f32(0.0f, v, 3);
-}
-
 inline mat4 to_mat4(const mat3& m) noexcept {
-    return store_cols(
-        clear_pad(vld1q_f32(&m.cols[0].x)), clear_pad(vld1q_f32(&m.cols[1].x)), clear_pad(vld1q_f32(&m.cols[2].x)), vsetq_lane_f32(1.0f, vdupq_n_f32(0.0f), 3));
+    return detail::store_cols(detail::clear_pad(vld1q_f32(&m.cols[0].x)), detail::clear_pad(vld1q_f32(&m.cols[1].x)),
+        detail::clear_pad(vld1q_f32(&m.cols[2].x)), vsetq_lane_f32(1.0f, vdupq_n_f32(0.0f), 3));
 }
 
 inline mat4 to_mat4(const mat3& m, const vec3& translation) noexcept {
-    return store_cols(clear_pad(vld1q_f32(&m.cols[0].x)), clear_pad(vld1q_f32(&m.cols[1].x)), clear_pad(vld1q_f32(&m.cols[2].x)),
-        vsetq_lane_f32(1.0f, vld1q_f32(&translation.x), 3));
+    return detail::store_cols(detail::clear_pad(vld1q_f32(&m.cols[0].x)), detail::clear_pad(vld1q_f32(&m.cols[1].x)),
+        detail::clear_pad(vld1q_f32(&m.cols[2].x)), vsetq_lane_f32(1.0f, vld1q_f32(&translation.x), 3));
 }
 
 inline vec3 get_translation(const mat4& m) noexcept {
     vec3 out{};
-    store(vld1q_f32(&m.cols[3].x), out);
+    detail::store(vld1q_f32(&m.cols[3].x), out);
     return out;
 }
 
@@ -1294,7 +1298,7 @@ inline quat quat_from_axis_angle(const vec3& axis, const float angle) noexcept {
 }
 
 inline float dot(const quat& a, const quat& b) noexcept {
-    return vaddvq_f32(vmulq_f32(load(a), load(b)));
+    return vaddvq_f32(vmulq_f32(detail::load(a), detail::load(b)));
 }
 inline float norm_sq(const quat& q) noexcept {
     return dot(q, q);
@@ -1304,24 +1308,24 @@ inline float norm(const quat& q) noexcept {
 }
 
 inline quat conjugate(const quat& q) noexcept {
-    float32x4_t v = load(q);
+    float32x4_t v = detail::load(q);
     const uint32x4_t mask = {0xFFFFFFFF, 0xFFFFFFFF, 0xFFFFFFFF, 0x00000000};
-    return store_quat(vbslq_f32(mask, vnegq_f32(v), v));
+    return detail::store_quat(vbslq_f32(mask, vnegq_f32(v), v));
 }
 
 inline quat negate(const quat& q) noexcept {
-    return store_quat(vnegq_f32(load(q)));
+    return detail::store_quat(vnegq_f32(detail::load(q)));
 }
 
 inline quat normalized(const quat& q) noexcept {
-    float32x4_t v = load(q);
-    return store_quat(vdivq_f32(v, vsqrtq_f32(dot_broadcast_4(v, v))));
+    float32x4_t v = detail::load(q);
+    return detail::store_quat(vdivq_f32(v, vsqrtq_f32(detail::dot_broadcast_4(v, v))));
 }
 
 inline quat inverse(const quat& q) noexcept {
-    float32x4_t v = load(q);
+    float32x4_t v = detail::load(q);
     const uint32x4_t mask = {0xFFFFFFFF, 0xFFFFFFFF, 0xFFFFFFFF, 0x00000000};
-    return store_quat(vdivq_f32(vbslq_f32(mask, vnegq_f32(v), v), dot_broadcast_4(v, v)));
+    return detail::store_quat(vdivq_f32(vbslq_f32(mask, vnegq_f32(v), v), detail::dot_broadcast_4(v, v)));
 }
 
 inline quat inverse_unit(const quat& q) noexcept {
@@ -1329,7 +1333,7 @@ inline quat inverse_unit(const quat& q) noexcept {
 }
 
 inline quat operator*(const quat& q1, const quat& q2) noexcept {
-    float32x4_t a = load(q1), b = load(q2);
+    float32x4_t a = detail::load(q1), b = detail::load(q2);
     float32x4_t aw = vdupq_laneq_f32(a, 3), ax = vdupq_laneq_f32(a, 0), ay = vdupq_laneq_f32(a, 1), az = vdupq_laneq_f32(a, 2);
     float32x4_t b_wzyx = __builtin_shufflevector(b, b, 3, 2, 1, 0);
     float32x4_t b_zwxy = __builtin_shufflevector(b, b, 2, 3, 0, 1);
@@ -1339,11 +1343,11 @@ inline quat operator*(const quat& q1, const quat& q2) noexcept {
     r = vfmaq_f32(r, ax, vmulq_f32(b_wzyx, sx));
     r = vfmaq_f32(r, ay, vmulq_f32(b_zwxy, sy));
     r = vfmaq_f32(r, az, vmulq_f32(b_yxwz, sz));
-    return store_quat(r);
+    return detail::store_quat(r);
 }
 
 inline vec3 rotate(const quat& q, const vec3& v) noexcept {
-    float32x4_t qv = load(q), vv = vld1q_f32(&v.x), qw = vdupq_laneq_f32(qv, 3);
+    float32x4_t qv = detail::load(q), vv = vld1q_f32(&v.x), qw = vdupq_laneq_f32(qv, 3);
     float32x4_t q_yzx = __builtin_shufflevector(qv, qv, 1, 2, 0, 3), q_zxy = __builtin_shufflevector(qv, qv, 2, 0, 1, 3);
     float32x4_t v_yzx = __builtin_shufflevector(vv, vv, 1, 2, 0, 3), v_zxy = __builtin_shufflevector(vv, vv, 2, 0, 1, 3);
     float32x4_t t = vaddq_f32(vfmsq_f32(vmulq_f32(q_yzx, v_zxy), q_zxy, v_yzx), vfmsq_f32(vmulq_f32(q_yzx, v_zxy), q_zxy, v_yzx));
@@ -1374,10 +1378,10 @@ inline mat4 to_mat4(const quat& q, const vec3& t) noexcept {
 }
 
 inline bool nearly_equal(const quat& a, const quat& b, float abs_tol = fp32_abs_tol, float rel_tol = fp32_rel_tol) noexcept {
-    float32x4_t av = load(a), bv = load(b);
+    float32x4_t av = detail::load(a), bv = detail::load(b);
     float32x4_t diff = vminq_f32(vabsq_f32(vsubq_f32(av, bv)), vabsq_f32(vaddq_f32(av, bv)));
     float32x4_t tol = vaddq_f32(vdupq_n_f32(abs_tol), vmulq_f32(vdupq_n_f32(rel_tol), vmaxq_f32(vabsq_f32(av), vabsq_f32(bv))));
-    return n_movemask(vcleq_f32(diff, tol)) == 0xF;
+    return detail::n_movemask(vcleq_f32(diff, tol)) == 0xF;
 }
 
 inline float angle_between(const quat& a, const quat& b) noexcept {
@@ -1385,7 +1389,7 @@ inline float angle_between(const quat& a, const quat& b) noexcept {
 }
 
 inline bool is_axis_aligned(const vec3& direction, float tolerance = fp32_rel_tol) noexcept {
-    return std::abs(dot_scalar<vec3>(load(normalized(direction)), load(snap_to_axis(direction)))) >= (1.0f - tolerance);
+    return std::abs(detail::dot_scalar<vec3>(detail::load(normalized(direction)), detail::load(snap_to_axis(direction)))) >= (1.0f - tolerance);
 }
 
 /* ============================================================
@@ -1393,12 +1397,12 @@ inline bool is_axis_aligned(const vec3& direction, float tolerance = fp32_rel_to
  * ============================================================ */
 
 template <spatial_vector Vec> Vec closest_point_on_segment(const Vec& point, const Vec& seg_start, const Vec& seg_end) noexcept {
-    const auto p = load(point), a = load(seg_start), b = load(seg_end);
-    const auto ab = n_sub(b, a), ap = n_sub(p, a);
-    auto t = n_div(dot_broadcast<Vec>(ab, ap), dot_broadcast<Vec>(ab, ab));
-    t = n_min(n_max(t, n_dup(0.0f, t)), n_dup(1.0f, t));
+    const auto p = detail::load(point), a = detail::load(seg_start), b = detail::load(seg_end);
+    const auto ab = detail::n_sub(b, a), ap = detail::n_sub(p, a);
+    auto t = detail::n_div(detail::dot_broadcast<Vec>(ab, ap), detail::dot_broadcast<Vec>(ab, ab));
+    t = detail::n_min(detail::n_max(t, detail::n_dup(0.0f, t)), detail::n_dup(1.0f, t));
     Vec out{};
-    store(n_fma(a, t, ab), out);
+    detail::store(detail::n_fma(a, t, ab), out);
     return out;
 }
 
@@ -1426,9 +1430,9 @@ inline segment_closest_result closest_points_between_segments(const vec3& a0, co
     const float32x4_t d2 = vsubq_f32(vld1q_f32(&b1.x), p2); /* direction of segment B */
     const float32x4_t r = vsubq_f32(p1, p2);
 
-    const auto a{dot_scalar_3(d1, d1)}; /* squared length of A */
-    const auto e{dot_scalar_3(d2, d2)}; /* squared length of B */
-    const auto f{dot_scalar_3(d2, r)};
+    const auto a{detail::dot_scalar_3(d1, d1)}; /* squared length of A */
+    const auto e{detail::dot_scalar_3(d2, d2)}; /* squared length of B */
+    const auto f{detail::dot_scalar_3(d2, r)};
 
     /* squared, since a and e are squared lengths */
     constexpr auto eps{fp32_abs_tol * fp32_abs_tol};
@@ -1441,12 +1445,12 @@ inline segment_closest_result closest_points_between_segments(const vec3& a0, co
         /* segment A is a point */
         t = std::clamp(f / e, 0.0f, 1.0f);
     } else {
-        const auto c{dot_scalar_3(d1, r)};
+        const auto c{detail::dot_scalar_3(d1, r)};
         if (e <= eps) {
             /* segment B is a point */
             s = std::clamp(-c / a, 0.0f, 1.0f);
         } else {
-            const auto b{dot_scalar_3(d1, d2)};
+            const auto b{detail::dot_scalar_3(d1, d2)};
             const auto denom{a * e - b * b}; /* >= 0; zero when segments are parallel */
 
             /* closest point on line A to line B, clamped; parallel -> pick s = 0 */
@@ -1473,7 +1477,7 @@ inline segment_closest_result closest_points_between_segments(const vec3& a0, co
     vst1q_f32(&out.point_b.x, c2);
     out.s = s;
     out.t = t;
-    out.distance_squared = dot_scalar_3(diff, diff);
+    out.distance_squared = detail::dot_scalar_3(diff, diff);
     return out;
 }
 
@@ -1516,7 +1520,7 @@ inline vec3 project_onto_plane(const vec3& point, const plane& pl) noexcept {
 
 inline vec2 project_to_2d(const vec3& point, const plane_basis& basis) noexcept {
     float32x4_t p = vsubq_f32(vld1q_f32(&point.x), vld1q_f32(&basis.origin.x));
-    return {dot_scalar_3(p, vld1q_f32(&basis.u.x)), dot_scalar_3(p, vld1q_f32(&basis.v.x))};
+    return {detail::dot_scalar_3(p, vld1q_f32(&basis.u.x)), detail::dot_scalar_3(p, vld1q_f32(&basis.v.x))};
 }
 
 inline vec3 unproject_to_3d(const vec2& p2, const plane_basis& basis) noexcept {
@@ -1529,7 +1533,7 @@ inline void project_to_2d_batch(const vec3* pts3, vec2* pts2, std::int32_t count
     float32x4_t o = vld1q_f32(&basis.origin.x), u = vld1q_f32(&basis.u.x), v = vld1q_f32(&basis.v.x);
     for (int i = 0; i < count; ++i) {
         float32x4_t p = vsubq_f32(vld1q_f32(&pts3[i].x), o);
-        pts2[i] = {dot_scalar_3(p, u), dot_scalar_3(p, v)};
+        pts2[i] = {detail::dot_scalar_3(p, u), detail::dot_scalar_3(p, v)};
     }
 }
 
@@ -1557,14 +1561,14 @@ inline segment_intersection_2d intersect_segments_2d(const vec2& a0, const vec2&
         return {};
     }
     vec2 pt{};
-    store(vfma_n_f32(load(a0), load(da), t), pt);
+    detail::store(vfma_n_f32(detail::load(a0), detail::load(da), t), pt);
     return {pt, t, u, true};
 }
 
 inline ray_box_hit intersect_ray_box(const vec2& origin, const vec2& direction, const box2d& box) noexcept {
-    float32x2_t orig = load(origin), inv_dir = vdiv_f32(vdup_n_f32(1.0f), load(direction));
+    float32x2_t orig = detail::load(origin), inv_dir = vdiv_f32(vdup_n_f32(1.0f), detail::load(direction));
     float32x2_t bmin, bmax;
-    load_min_max(box, bmin, bmax);
+    detail::load_min_max(box, bmin, bmax);
     float32x2_t t1 = vmul_f32(vsub_f32(bmin, orig), inv_dir), t2 = vmul_f32(vsub_f32(bmax, orig), inv_dir);
     float32x2_t t_near = vmin_f32(t1, t2), t_far = vmax_f32(t1, t2);
     const float te{std::max(vget_lane_f32(t_near, 0), vget_lane_f32(t_near, 1))};
@@ -1634,7 +1638,7 @@ inline segment_polygon_hit intersect_segment_polygon(const vec2& a, const vec2& 
  * ============================================================ */
 
 inline ivec2 grid_cell(const vec2& point, const vec2& grid_origin, float cell_size) noexcept {
-    float32x2_t p = vmul_n_f32(vsub_f32(load(point), load(grid_origin)), 1.0f / cell_size);
+    float32x2_t p = vmul_n_f32(vsub_f32(detail::load(point), detail::load(grid_origin)), 1.0f / cell_size);
     int32x2_t ci = vcvt_s32_f32(vrndm_f32(p));
     return {vget_lane_s32(ci, 0), vget_lane_s32(ci, 1)};
 }
