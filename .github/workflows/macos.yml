@@ -1,0 +1,43 @@
+# Apple Silicon build + tests with Homebrew LLVM Clang and its libc++. Not Apple Clang: CMake scans
+# C++ modules only for LLVM Clang, GCC and MSVC.
+name: macos
+
+on:
+  push:
+    branches: [master]
+    paths:
+      - 'src/**'
+      - 'tests/**'
+      - 'cmake/**'
+      - '**/CMakeLists.txt'
+      - '.github/workflows/macos.yml'
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: "${{ github.workflow }}-${{ github.ref }}"
+  cancel-in-progress: true
+
+jobs:
+  build-test:
+    name: ${{ matrix.build_type }}
+    runs-on: macos-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        build_type: [Debug, Release]
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install LLVM and Ninja
+        run: brew install llvm ninja
+      - name: Configure, build and test
+        # Links Homebrew's libc++: its headers are newer than the system libc++.
+        run: |
+          llvm="$(brew --prefix llvm)"
+          cmake -G Ninja -B build -DCMAKE_BUILD_TYPE=${{ matrix.build_type }} -DSGL_TESTS=ON \
+            -DCMAKE_C_COMPILER="$llvm/bin/clang" -DCMAKE_CXX_COMPILER="$llvm/bin/clang++" \
+            -DCMAKE_EXE_LINKER_FLAGS="-L$llvm/lib/c++ -L$llvm/lib/unwind -lunwind -Wl,-rpath,$llvm/lib/c++"
+          cmake --build build -j
+          ctest --test-dir build --output-on-failure

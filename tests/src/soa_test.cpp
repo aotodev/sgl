@@ -145,7 +145,7 @@ ref_hit ref_ray(const std::array<float, 3>& lo, const std::array<float, 3>& hi, 
     float t_far{t_max};
     bool inside{true};
     for (std::size_t a{}; a < 3; ++a) {
-        const float inv{1.0f / d[a]};
+        const float inv{d[a] == 0.0f ? std::copysign(inf, d[a]) : 1.0f / d[a]};
         if (std::isinf(inv)) {
             inside = inside && lo[a] <= o[a] && o[a] <= hi[a];
             continue;
@@ -435,7 +435,12 @@ template <class R, class P> std::vector<std::uint32_t> run_match_indices(const R
 }
 
 std::vector<std::uint32_t> as_u32(const std::vector<std::size_t>& v) {
-    return {v.begin(), v.end()};
+    std::vector<std::uint32_t> out;
+    out.reserve(v.size());
+    for (const std::size_t i : v) {
+        out.push_back(static_cast<std::uint32_t>(i));
+    }
+    return out;
 }
 
 } // namespace

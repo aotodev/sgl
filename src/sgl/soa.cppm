@@ -161,7 +161,11 @@ template <> struct vocab_point<ivec3> {
 template <class V>
 concept vocab_point_type = requires { vocab_point<std::remove_cvref_t<V>>::dimension; };
 
-template <class V> constexpr std::size_t dimension_of = vocab_point<V>::dimension;
+template <class V> constexpr std::size_t dimension_of = 0;
+template <> constexpr std::size_t dimension_of<vec2> = 2;
+template <> constexpr std::size_t dimension_of<vec3> = 3;
+template <> constexpr std::size_t dimension_of<ivec2> = 2;
+template <> constexpr std::size_t dimension_of<ivec3> = 3;
 template <> constexpr std::size_t dimension_of<box2d> = 2;
 template <> constexpr std::size_t dimension_of<box3d> = 3;
 
@@ -711,7 +715,8 @@ ray_hit<T, D> hit_by(
     const std::array<T, D>& origin, const std::array<T, D>& direction, const T t_min = 0, const T t_max = std::numeric_limits<T>::infinity()) noexcept {
     std::array<T, D> inv{};
     for (std::size_t a{}; a < D; ++a) {
-        inv[a] = T{1} / direction[a];
+        /* No division by zero: keeps the FP divide-by-zero flag clear, and MSVC flags a constant one (C4723) in the caller. */
+        inv[a] = direction[a] == T{0} ? std::copysign(std::numeric_limits<T>::infinity(), direction[a]) : T{1} / direction[a];
     }
     return {origin, inv, t_min, t_max};
 }
@@ -922,14 +927,16 @@ template <point_range R> auto bounds(const R& range) noexcept {
     auto hi1{hi0};
 
     std::size_t i{};
-    for (; std::floating_point<T> && i + 2 * lanes <= n; i += 2 * lanes) {
-        for (std::size_t a{}; a < D; ++a) {
-            const auto x0{wide::load(view.axis[a] + i)};
-            const auto x1{wide::load(view.axis[a] + i + lanes)};
-            lo0[a] = min(x0, lo0[a]);
-            hi0[a] = max(x0, hi0[a]);
-            lo1[a] = min(x1, lo1[a]);
-            hi1[a] = max(x1, hi1[a]);
+    if constexpr (std::floating_point<T>) {
+        for (; i + 2 * lanes <= n; i += 2 * lanes) {
+            for (std::size_t a{}; a < D; ++a) {
+                const auto x0{wide::load(view.axis[a] + i)};
+                const auto x1{wide::load(view.axis[a] + i + lanes)};
+                lo0[a] = min(x0, lo0[a]);
+                hi0[a] = max(x0, hi0[a]);
+                lo1[a] = min(x1, lo1[a]);
+                hi1[a] = max(x1, hi1[a]);
+            }
         }
     }
     for (; i + lanes <= n; i += lanes) {

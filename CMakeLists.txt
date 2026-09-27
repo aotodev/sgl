@@ -31,7 +31,10 @@ set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 # Compiler support check: each minimum is the higher of the C++20 named-module floor
 # and the CWG 2518 floor.
 # ---------------------------------------------------------------------------------------
-if(CMAKE_CXX_COMPILER_ID MATCHES "Clang")
+if(CMAKE_CXX_COMPILER_ID STREQUAL "AppleClang")
+    message(FATAL_ERROR "sgl: Apple Clang is not supported: CMake scans C++20 modules only for LLVM "
+        "Clang, GCC and MSVC. On macOS use LLVM Clang, e.g. Homebrew's llvm.")
+elseif(CMAKE_CXX_COMPILER_ID MATCHES "Clang")
     if(CMAKE_CXX_COMPILER_VERSION VERSION_LESS "17")
         message(FATAL_ERROR "sgl: Clang >= 17 required (C++20 modules + CWG 2518) "
             "(found ${CMAKE_CXX_COMPILER_VERSION}).")
@@ -73,6 +76,13 @@ option(SGL_PIC   "Build with position-independent code" OFF)
 option(SGL_TESTS "Build sgl tests" OFF)
 option(SGL_BENCHMARKS "Build sgl benchmarks" OFF)
 option(SGL_INSTALL "Generate install + find_package() rules" "${PROJECT_IS_TOP_LEVEL}")
+option(SGL_SANITIZERS "Build everything with ASan + UBSan (GCC/Clang, top level only)" OFF)
+
+# Directory-wide so the module units, the tests and the fetched GoogleTest all agree.
+if(SGL_SANITIZERS AND PROJECT_IS_TOP_LEVEL AND NOT MSVC)
+    add_compile_options(-fsanitize=address,undefined -fno-sanitize-recover=all -fno-omit-frame-pointer)
+    add_link_options(-fsanitize=address,undefined)
+endif()
 
 # ---------------------------------------------------------------------------------------
 # Library (always STATIC: the module interface is the real deliverable)
@@ -89,6 +99,10 @@ target_compile_options(${PROJECT_NAME} PUBLIC
     "$<$<AND:$<BOOL:${IS_X86_64}>,$<CXX_COMPILER_FRONTEND_VARIANT:GNU>>:-mavx2;-mfma>"
     "$<$<AND:$<BOOL:${IS_X86_64}>,$<CXX_COMPILER_FRONTEND_VARIANT:MSVC>>:/arch:AVX2>"
 )
+
+# C4324: vec3 and the boxes are padded to a register width on purpose. PUBLIC: MSVC repeats it in
+# every TU that uses the types, so a consumer on /W4 /WX needs it too.
+target_compile_options(${PROJECT_NAME} PUBLIC "$<$<CXX_COMPILER_ID:MSVC>:/wd4324>")
 
 if(SGL_PIC)
     set_target_properties(${PROJECT_NAME} PROPERTIES POSITION_INDEPENDENT_CODE ON)
