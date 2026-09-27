@@ -2,7 +2,9 @@
  * @file geometry_test.cpp
  * @brief Unit tests for geometric operations (segments, planes, intersections, grids, transforms).
  */
+#include <cstdint>
 #include <gtest/gtest.h>
+#include <limits>
 
 import sgl;
 
@@ -186,6 +188,52 @@ TEST(Geometry, GridCellRange2d) {
     EXPECT_EQ(r.max.x, 3);
 }
 
+/* Regression: out-of-range cells were INT_MIN on x86 and INT_MAX (saturated) on NEON. */
+TEST(Geometry, GridCellSaturates) {
+    constexpr std::int32_t lo{std::numeric_limits<std::int32_t>::min()};
+    constexpr std::int32_t hi{std::numeric_limits<std::int32_t>::max()};
+    const auto c2{sgl::grid_cell(sgl::vec2{3e9f, -3e9f}, sgl::vec2{0, 0}, 1.0f)};
+    EXPECT_EQ(c2.x, hi);
+    EXPECT_EQ(c2.y, lo);
+    const auto c3{sgl::grid_cell(sgl::vec3{-1e20f, 2.5f, 1e20f}, sgl::vec3{0, 0, 0}, 1.0f)};
+    EXPECT_EQ(c3.x, lo);
+    EXPECT_EQ(c3.y, 2);
+    EXPECT_EQ(c3.z, hi);
+    const auto nan_cell{sgl::grid_cell(sgl::vec2{std::numeric_limits<float>::quiet_NaN(), 1.5f}, sgl::vec2{0, 0}, 1.0f)};
+    EXPECT_EQ(nan_cell.x, lo) << "NaN maps to INT_MIN";
+    EXPECT_EQ(nan_cell.y, 1);
+}
+
+/* Regression: the backends disagreed on these (NaN handling of minps/maxps vs FMIN/FMAX). */
+TEST(Geometry, RayBoxGrazingEdgesHitOnEveryBackend) {
+    const sgl::box2d square{.min = {0, 0}, .max = {1, 1}};
+    for (const float y : {0.0f, 1.0f}) {
+        const auto h{sgl::intersect_ray_box(sgl::vec2{-1, y}, sgl::vec2{1, 0}, square)};
+        EXPECT_TRUE(h.hit) << "y=" << y;
+        EXPECT_EQ(h.t_entry, 1.0f) << "y=" << y;
+        EXPECT_EQ(h.t_exit, 2.0f) << "y=" << y;
+    }
+    EXPECT_FALSE(sgl::intersect_ray_box(sgl::vec2{-1, -0.0001f}, sgl::vec2{1, 0}, square).hit);
+    EXPECT_FALSE(sgl::intersect_ray_box(sgl::vec2{-1, 1.0001f}, sgl::vec2{1, -0.0f}, square).hit);
+
+    const sgl::box3d cube{.min = {0, 0, 0}, .max = {1, 1, 1}};
+    const auto edge{sgl::intersect_ray_box(sgl::vec3{-1, 0, 1}, sgl::vec3{1, 0, 0}, cube)};
+    EXPECT_TRUE(edge.hit);
+    EXPECT_EQ(edge.t_entry, 1.0f);
+    EXPECT_EQ(edge.t_exit, 2.0f);
+    EXPECT_FALSE(sgl::intersect_ray_box(sgl::vec3{-1, 0, 1.0001f}, sgl::vec3{1, 0, 0}, cube).hit);
+}
+
+TEST(Geometry, ClosestPointOnDegenerateSegmentIsItsStart) {
+    const auto p3{sgl::closest_point_on_segment(sgl::vec3{5, 5, 5}, sgl::vec3{1, 2, 3}, sgl::vec3{1, 2, 3})};
+    EXPECT_EQ(p3.x, 1.0f);
+    EXPECT_EQ(p3.y, 2.0f);
+    EXPECT_EQ(p3.z, 3.0f);
+    const auto p2{sgl::closest_point_on_segment(sgl::vec2{5, 5}, sgl::vec2{1, 2}, sgl::vec2{1, 2})};
+    EXPECT_EQ(p2.x, 1.0f);
+    EXPECT_EQ(p2.y, 2.0f);
+}
+
 /* ============================================================
  * Transform operations
  * ============================================================ */
@@ -225,10 +273,24 @@ TEST(Geometry, InverseUniformTransform) {
 TEST(Geometry, InverseTransform) {
     sgl::transform tf{};
     tf.position = {1, 2, 3};
-    tf.scale = {2, 4, 8};
-    auto inv = sgl::inverse(tf);
+    tf.rotation = sgl::quat_from_axis_angle(sgl::vec3{0, 0, 1}, 1.5707963f);
+    tf.scale = {2, 2, 2};
+    const auto inv{sgl::inverse(tf)};
     EXPECT_NEAR(inv.scale.x, 0.5f, 1e-5f);
-    EXPECT_NEAR(inv.scale.y, 0.25f, 1e-5f);
+    const sgl::vec3 p{1, -2, 0.5f};
+    const auto back{sgl::transform_point(inv, sgl::transform_point(tf, p))};
+    EXPECT_NEAR(back.x, p.x, 1e-5f);
+    EXPECT_NEAR(back.y, p.y, 1e-5f);
+    EXPECT_NEAR(back.z, p.z, 1e-5f);
+}
+
+/* Regression: a non-uniform inverse is not a scale-then-rotate transform, so inverse() returned a
+ * wrong one; it now asserts uniform scale (release builds keep computing the uniform formula). */
+TEST(Geometry, InverseTransformRequiresUniformScale) {
+    sgl::transform tf{};
+    tf.rotation = sgl::quat_from_axis_angle(sgl::vec3{0, 0, 1}, 1.5707963f);
+    tf.scale = {2, 1, 1};
+    EXPECT_DEBUG_DEATH((void)sgl::inverse(tf), "uniform");
 }
 
 TEST(Geometry, ComposeTransform) {

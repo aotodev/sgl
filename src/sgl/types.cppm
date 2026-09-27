@@ -43,14 +43,17 @@ export struct alignas(8) vec2 {
     float x; ///< @brief x component.
     float y; ///< @brief y component.
 
+    /* Member selection, not (&x)[i]: indexing past a scalar member is UB and not a constant
+     * expression. A constant index folds to the same load; a runtime one costs a compare or two
+     * (cmov or branch) where (&x)[i] was one indexed load. */
     constexpr float operator[](std::size_t i) const noexcept {
         assert(i < 2);
-        return (&x)[i];
+        return i == 0 ? x : y;
     }
 
     constexpr float& operator[](std::size_t i) noexcept {
         assert(i < 2);
-        return (&x)[i];
+        return i == 0 ? x : y;
     }
 };
 
@@ -70,12 +73,26 @@ export struct alignas(16) vec3 {
 
     constexpr float operator[](std::size_t i) const noexcept {
         assert(i < 3);
-        return (&x)[i];
+        switch (i) {
+        case 0:
+            return x;
+        case 1:
+            return y;
+        default:
+            return z;
+        }
     }
 
     constexpr float& operator[](std::size_t i) noexcept {
         assert(i < 3);
-        return (&x)[i];
+        switch (i) {
+        case 0:
+            return x;
+        case 1:
+            return y;
+        default:
+            return z;
+        }
     }
 };
 
@@ -88,12 +105,30 @@ export struct alignas(16) vec4 {
 
     constexpr float operator[](std::size_t i) const noexcept {
         assert(i < 4);
-        return (&x)[i];
+        switch (i) {
+        case 0:
+            return x;
+        case 1:
+            return y;
+        case 2:
+            return z;
+        default:
+            return w;
+        }
     }
 
     constexpr float& operator[](std::size_t i) noexcept {
         assert(i < 4);
-        return (&x)[i];
+        switch (i) {
+        case 0:
+            return x;
+        case 1:
+            return y;
+        case 2:
+            return z;
+        default:
+            return w;
+        }
     }
 };
 

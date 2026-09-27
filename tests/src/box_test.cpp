@@ -67,6 +67,13 @@ TEST(Box2d, Contains_Box2d) {
     EXPECT_FALSE(sgl::contains(outer, outside));
 }
 
+TEST(Box2d, ContainsIsClosed) {
+    const sgl::box2d b{.min = {0, 0}, .max = {10, 10}};
+    EXPECT_TRUE(sgl::contains(b, sgl::vec2{0, 5}));
+    EXPECT_TRUE(sgl::contains(b, sgl::vec2{10, 10}));
+    EXPECT_FALSE(sgl::contains(b, sgl::vec2{-0.001f, 5}));
+}
+
 TEST(Box2d, ContainsPoint) {
     sgl::box2d b{.min = {0, 0}, .max = {10, 10}};
     EXPECT_TRUE(sgl::contains_point(b, sgl::vec2{5, 5}));
@@ -139,6 +146,14 @@ TEST(Box3d, IsValid) {
 
 TEST(Box3d, ContainsPoint_Box3d) {
     EXPECT_TRUE(sgl::contains(sgl::box3d{.min = {0, 0, 0}, .max = {10, 10, 10}}, sgl::vec3{5, 5, 5}));
+}
+
+/* Regression: contains was strict while contains_point (and sgl::soa::contains) are closed. */
+TEST(Box3d, ContainsIsClosed) {
+    const sgl::box3d b{.min = {0, 0, 0}, .max = {10, 10, 10}};
+    EXPECT_TRUE(sgl::contains(b, sgl::vec3{0, 5, 5}));
+    EXPECT_TRUE(sgl::contains(b, sgl::vec3{10, 10, 10}));
+    EXPECT_FALSE(sgl::contains(b, sgl::vec3{10.001f, 5, 5}));
 }
 
 TEST(Box3d, Volume) {

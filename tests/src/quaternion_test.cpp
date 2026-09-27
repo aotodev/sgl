@@ -138,11 +138,31 @@ TEST(Quat, NearlyEqual) {
     EXPECT_TRUE(sgl::nearly_equal(a, c)); /* same rotation, opposite sign */
 }
 
+/* Regression: the sign was chosen per lane, so two different rotations could compare equal. */
+TEST(Quat, NearlyEqualDoesNotMixSigns) {
+    EXPECT_FALSE(sgl::nearly_equal(sgl::quat{0.5f, 0.5f, 0.5f, 0.5f}, sgl::quat{0.5f, -0.5f, 0.5f, -0.5f}));
+    const auto q{sgl::quat_from_axis_angle(sgl::vec3{1, 2, 3}, 0.7f)};
+    EXPECT_TRUE(sgl::nearly_equal(q, sgl::negate(q)));
+    EXPECT_FALSE(sgl::nearly_equal(q, sgl::quat_from_axis_angle(sgl::vec3{1, 2, 3}, 0.8f)));
+}
+
 TEST(Quat, AngleBetween) {
     sgl::quat q1 = sgl::quat_from_axis_angle(sgl::vec3{0, 0, 1}, 0.0f);
     sgl::quat q2 = sgl::quat_from_axis_angle(sgl::vec3{0, 0, 1}, std::acos(-1.0f) * 0.5f); /* 90 degrees */
     auto angle = sgl::angle_between(q1, q2);
     EXPECT_NEAR(angle, std::acos(-1.0f) * 0.5f, 1e-4f);
+}
+
+/* Regression: acos near 1 lost the small angles (1e-3 rad came back as 9.77e-4). */
+TEST(Quat, AngleBetweenSmallAndLarge) {
+    for (const float angle : {1e-4f, 1e-3f, 0.5f, 3.0f}) {
+        const auto q{sgl::quat_from_axis_angle(sgl::vec3{0, 0, 1}, angle)};
+        EXPECT_NEAR(sgl::angle_between(sgl::quat_identity, q), angle, angle * 1e-4f) << "angle=" << angle;
+        EXPECT_NEAR(sgl::angle_between(q, sgl::quat_identity), angle, angle * 1e-4f) << "angle=" << angle;
+    }
+    /* q and -q are the same rotation */
+    const auto q{sgl::quat_from_axis_angle(sgl::vec3{0, 1, 0}, 0.25f)};
+    EXPECT_NEAR(sgl::angle_between(sgl::quat_identity, sgl::negate(q)), 0.25f, 1e-5f);
 }
 
 TEST(Quat, IsAxisAligned) {

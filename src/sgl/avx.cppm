@@ -251,45 +251,37 @@ inline __m128 load(const mat2& m) noexcept {
     return _mm_load_ps(&m.cols[0].x);
 }
 
+/* Per-axis slab interval of a ray. An axis the ray is parallel to has an infinite reciprocal, and
+ * (min - o) * inf is NaN when the origin lies on the slab: minps / maxps would resolve that by
+ * operand order and NEON by propagating it. Such an axis is a containment test instead: unbounded
+ * when the origin is within the closed slab, empty otherwise. */
+struct slab_interval_result {
+    __m128 t_near;
+    __m128 t_far;
+};
+
+inline slab_interval_result slab_interval(const __m128 orig, const __m128 inv_dir, const __m128 bmin, const __m128 bmax) noexcept {
+    const __m128 inf{_mm_set1_ps(std::numeric_limits<float>::infinity())};
+    const __m128 neg_inf{_mm_set1_ps(-std::numeric_limits<float>::infinity())};
+    const __m128 t1{_mm_mul_ps(_mm_sub_ps(bmin, orig), inv_dir)};
+    const __m128 t2{_mm_mul_ps(_mm_sub_ps(bmax, orig), inv_dir)};
+    const __m128 parallel{_mm_cmpeq_ps(_mm_andnot_ps(_mm_set1_ps(-0.0f), inv_dir), inf)};
+    const __m128 inside{_mm_and_ps(_mm_cmple_ps(bmin, orig), _mm_cmple_ps(orig, bmax))};
+    return {_mm_blendv_ps(_mm_min_ps(t1, t2), _mm_blendv_ps(inf, neg_inf, inside), parallel),
+        _mm_blendv_ps(_mm_max_ps(t1, t2), _mm_blendv_ps(neg_inf, inf, inside), parallel)};
+}
+
+/* float -> int32 saturating to the int32 range, as NEON's vcvt does; cvtps alone gives INT_MIN for
+ * anything out of range. NaN gives INT_MIN (maxps returns its second operand), on NEON too. */
+inline __m128i saturating_cvt(const __m128 f) noexcept {
+    const __m128i clamped_low{_mm_cvtps_epi32(_mm_max_ps(f, _mm_set1_ps(-2147483648.0f)))};
+    const __m128 over{_mm_cmpge_ps(f, _mm_set1_ps(2147483648.0f))};
+    return _mm_blendv_epi8(clamped_low, _mm_set1_epi32(std::numeric_limits<std::int32_t>::max()), _mm_castps_si128(over));
+}
+
 } // namespace sgl::detail
 
 export namespace sgl {
-
-/* non-constexpr but simd and branchless */
-template <vector Vec> bool nearly_equal(const Vec& lhs, const Vec& rhs, const float abs_tol = fp32_abs_tol, const float rel_tol = fp32_rel_tol) noexcept {
-    const __m128 a = detail::load(lhs);
-    const __m128 b = detail::load(rhs);
-
-    /* abs(a-b) */
-    const __m128 sign_mask = _mm_set1_ps(-0.0f);
-
-    /* Exact equality (handles +/-inf) */
-    const __m128 exact = _mm_cmpeq_ps(a, b);
-
-    /* absolute check */
-    const __m128 diff = _mm_andnot_ps(sign_mask, _mm_sub_ps(a, b));
-    const __m128 abs_ok = _mm_cmple_ps(diff, _mm_set1_ps(abs_tol));
-
-    /* relative check */
-    const __m128 abs_a = _mm_andnot_ps(sign_mask, a);
-    const __m128 abs_b = _mm_andnot_ps(sign_mask, b);
-    const __m128 largest = _mm_max_ps(abs_a, abs_b);
-    const __m128 rel_ok = _mm_cmple_ps(diff, _mm_mul_ps(largest, _mm_set1_ps(rel_tol)));
-
-    const __m128 ok = _mm_or_ps(exact, _mm_or_ps(abs_ok, rel_ok));
-
-    constexpr auto mask{detail::lane_mask<Vec>()};
-    return (_mm_movemask_ps(ok) & mask) == mask;
-}
-
-template <vector Vec> bool nearly_zero(const Vec& val, const float tol = fp32_abs_tol) noexcept {
-    const __m128 sign_mask = _mm_set1_ps(-0.0f);
-    const __m128 abs_val = _mm_andnot_ps(sign_mask, detail::load(val));
-    const __m128 ok = _mm_cmplt_ps(abs_val, _mm_set1_ps(tol));
-
-    constexpr auto mask{detail::lane_mask<Vec>()};
-    return (_mm_movemask_ps(ok) & mask) == mask;
-}
 
 template <vector Vec> bool any_nearly_zero(const Vec& val, const float tol = fp32_abs_tol) noexcept {
     const __m128 sign_mask = _mm_set1_ps(-0.0f);
@@ -596,21 +588,6 @@ template <vector Vec> bool is_perpendicular(const Vec& a, const Vec& b, float to
     return std::abs(d) <= tol;
 }
 
-template <vector Vec> bool is_parallel(const Vec& a, const Vec& b, float tol = fp32_rel_tol) noexcept {
-    constexpr auto mask{detail::dp_scalar_mask<Vec>()};
-
-    /* Cauchy-Schwarz equality
-     * dot(a,b)^2 ~= dot(a,a) * dot(b,b) */
-    const auto va = detail::load(a);
-    const auto vb = detail::load(b);
-
-    const auto ab{_mm_cvtss_f32(_mm_dp_ps(va, vb, mask))};
-    const auto aa{_mm_cvtss_f32(_mm_dp_ps(va, va, mask))};
-    const auto bb{_mm_cvtss_f32(_mm_dp_ps(vb, vb, mask))};
-
-    return std::abs(ab * ab - aa * bb) <= tol * aa * bb;
-}
-
 template <vector Vec> bool all_greater_than(const Vec& a, const Vec& b) noexcept {
     constexpr auto mask{detail::lane_mask<Vec>()};
     return (_mm_movemask_ps(_mm_cmpgt_ps(detail::load(a), detail::load(b))) & mask) == mask;
@@ -624,11 +601,6 @@ template <vector Vec> bool all_less_than(const Vec& a, const Vec& b) noexcept {
 template <vector Vec> bool any_greater_than(const Vec& a, const Vec& b) noexcept {
     constexpr auto mask{detail::lane_mask<Vec>()};
     return static_cast<bool>(_mm_movemask_ps(_mm_cmpgt_ps(detail::load(a), detail::load(b))) & mask);
-}
-
-/* AABB containment: point inside box */
-inline bool contains(const box3d& box, const vec3& point) {
-    return all_greater_than(point, box.min) && all_less_than(point, box.max);
 }
 
 /* vec2: returns scalar (the z-component of the implied 3D cross) */
@@ -662,13 +634,23 @@ inline vec3 cross(const vec3& a, const vec3& b) noexcept {
     return out;
 }
 
-/* Specializations, faster */
-template <> inline bool is_parallel<vec2>(const vec2& a, const vec2& b, float tol) noexcept {
-    return std::abs(cross(a, b)) <= tol;
-}
-
-template <> inline bool is_parallel<vec3>(const vec3& a, const vec3& b, float tol) noexcept {
-    return nearly_zero(cross(a, b), tol);
+/* Whether sin^2 of the angle between a and b is within tol: |a x b|^2 <= tol |a|^2 |b|^2, which
+ * does not depend on the lengths. vec4 has no cross product and uses Lagrange's identity
+ * |a|^2 |b|^2 - (a.b)^2 instead. A zero vector is parallel to everything. */
+template <vector Vec> bool is_parallel(const Vec& a, const Vec& b, const float tol = fp32_rel_tol) noexcept {
+    const float aa{dot(a, a)};
+    const float bb{dot(b, b)};
+    float cross_sq{};
+    if constexpr (std::is_same_v<Vec, vec2>) {
+        const float c{cross(a, b)};
+        cross_sq = c * c;
+    } else if constexpr (std::is_same_v<Vec, vec3>) {
+        cross_sq = length_squared(cross(a, b));
+    } else {
+        const float ab{dot(a, b)};
+        cross_sq = std::abs(aa * bb - ab * ab);
+    }
+    return cross_sq <= tol * aa * bb;
 }
 
 /* vec2: {-y, x}, a 90 degree counter-clockwise rotation */
@@ -704,21 +686,12 @@ inline vec3 perpendicular(const vec3& v) noexcept {
     return cross(v, vec3{0.0f, 0.0f, 1.0f});
 }
 
+/* Kahan's formula, 2 atan2(|a |b| - b |a||, |a |b| + b |a||): accurate at every angle, where acos
+ * of the cosine loses the small ones. A zero vector gives 0. */
 template <vector Vec> float angle_between(const Vec& a, const Vec& b) noexcept {
-    const auto va = detail::load(a);
-    const auto vb = detail::load(b);
-
-    /* cos(theta) = dot(a,b) / sqrt(dot(a,a) * dot(b,b)) */
-    const auto ab = _mm_dp_ps(va, vb, detail::dp_scalar_mask<Vec>());
-    const auto aa = _mm_dp_ps(va, va, detail::dp_scalar_mask<Vec>());
-    const auto bb = _mm_dp_ps(vb, vb, detail::dp_scalar_mask<Vec>());
-
-    const auto cos_theta = _mm_div_ss(ab, _mm_sqrt_ss(_mm_mul_ss(aa, bb)));
-
-    /* clamp to [-1,1], guarding against fp overshoot before acos */
-    const auto ct{_mm_cvtss_f32(_mm_min_ss(_mm_max_ss(cos_theta, _mm_set_ss(-1.0f)), _mm_set_ss(1.0f)))};
-
-    return std::acos(ct);
+    const Vec u{a * length(b)};
+    const Vec v{b * length(a)};
+    return 2.0f * std::atan2(length(u - v), length(u + v));
 }
 
 template <box_type Box> bool is_valid(const Box& b) noexcept {
@@ -818,6 +791,15 @@ template <box_type Box> bool contains_point(const Box& b, const detail::box_vec_
     constexpr auto mask = detail::box_traits<Box>::lane_mask;
     const std::int32_t ok = _mm_movemask_ps(_mm_cmple_ps(lo, pv)) & _mm_movemask_ps(_mm_cmple_ps(pv, hi));
     return (ok & mask) == mask;
+}
+
+/* Closed, like contains_point: a point on a face is inside. */
+inline bool contains(const box2d& box, const vec2& point) noexcept {
+    return contains_point(box, point);
+}
+
+inline bool contains(const box3d& box, const vec3& point) noexcept {
+    return contains_point(box, point);
 }
 
 template <box_type Box> Box intersection(const Box& a, const Box& b) noexcept {
@@ -1526,32 +1508,22 @@ inline mat4 to_mat4(const quat& q, const vec3& translation) noexcept {
 }
 
 inline bool nearly_equal(const quat& a, const quat& b, const float abs_tol = fp32_abs_tol, const float rel_tol = fp32_rel_tol) noexcept {
-    /* quaternions q and -q represent the same rotation,c heck both orientations */
-    const __m128 av = detail::load(a);
-    const __m128 bv = detail::load(b);
-    const __m128 neg_bv = _mm_xor_ps(bv, _mm_set1_ps(-0.0f));
-
-    /* |a - b| */
-    const __m128 diff1 = _mm_andnot_ps(_mm_set1_ps(-0.0f), _mm_sub_ps(av, bv));
-    /* |a + b| */
-    const __m128 diff2 = _mm_andnot_ps(_mm_set1_ps(-0.0f), _mm_sub_ps(av, neg_bv));
-    /* min(|a-b|, |a+b|) */
-    const __m128 diff = _mm_min_ps(diff1, diff2);
-
-    /* Combined tolerance: abs_tol + rel_tol * max(|a|, |b|) */
-    const __m128 abs_a = _mm_andnot_ps(_mm_set1_ps(-0.0f), av);
-    const __m128 abs_b = _mm_andnot_ps(_mm_set1_ps(-0.0f), bv);
-    const __m128 tol = _mm_add_ps(_mm_set1_ps(abs_tol), _mm_mul_ps(_mm_set1_ps(rel_tol), _mm_max_ps(abs_a, abs_b)));
-
-    const __m128 cmp = _mm_cmple_ps(diff, tol);
-    return _mm_movemask_ps(cmp) == 0xF;
+    /* q and -q are the same rotation: equal when every lane of a - b, or every lane of a + b, is within
+     * tolerance. Not a per-lane choice, which would accept a mix of the two. */
+    const __m128 sign{_mm_set1_ps(-0.0f)};
+    const __m128 av{detail::load(a)};
+    const __m128 bv{detail::load(b)};
+    const __m128 tol{_mm_add_ps(_mm_set1_ps(abs_tol), _mm_mul_ps(_mm_set1_ps(rel_tol), _mm_max_ps(_mm_andnot_ps(sign, av), _mm_andnot_ps(sign, bv))))};
+    const __m128 same{_mm_cmple_ps(_mm_andnot_ps(sign, _mm_sub_ps(av, bv)), tol)};
+    const __m128 flipped{_mm_cmple_ps(_mm_andnot_ps(sign, _mm_add_ps(av, bv)), tol)};
+    return _mm_movemask_ps(same) == 0xF || _mm_movemask_ps(flipped) == 0xF;
 }
 
-/* Returns the shortest rotation angle (radians) to go from orientation a to b:
- *   angle = 2 * acos(|dot(a, b)|) */
+/* The shortest rotation angle (radians, in [0, pi]) from orientation a to b: 2 atan2(|xyz|, |w|) of
+ * conj(a) * b, accurate where 2 acos(|dot(a, b)|) loses the small angles. */
 inline float angle_between(const quat& a, const quat& b) noexcept {
-    /* note that we clamp for acos safety */
-    return 2.0f * std::acos(std::min(std::abs(dot(a, b)), 1.0f));
+    const quat d{conjugate(a) * b};
+    return 2.0f * std::atan2(std::sqrt(d.x * d.x + d.y * d.y + d.z * d.z), std::abs(d.w));
 }
 
 /* Returns true when `direction` is within `tolerance` of a cardinal axis. */
@@ -1586,6 +1558,7 @@ template <spatial_vector Vec> Vec closest_point_on_segment(const Vec& point, con
 
     /* t = dot(ap, ab) / dot(ab, ab), clamped to [0, 1] */
     auto t{_mm_div_ps(ab_dot_ap, ab_dot_ab)};
+    /* maxps returns its second operand for NaN, so a zero-length segment's 0 / 0 gives t = 0: the start. */
     t = _mm_max_ps(t, _mm_setzero_ps());
     t = _mm_min_ps(t, _mm_set1_ps(1.0f));
 
@@ -1827,8 +1800,8 @@ inline segment_intersection_2d intersect_segments_2d(const vec2& a0, const vec2&
  * Computes t_entry and t_exit for all slab pairs simultaneously.
  *
  * Uses reciprocal direction to turn division into multiplication.
- * Handles infinities correctly when direction component is 0
- * (IEEE 754: 1/0 = +/-inf, then min/max propagate correctly).
+ * The box is closed: a ray grazing a face hits it. A zero direction component makes that axis a
+ * containment test (see detail::slab_interval).
  */
 inline ray_box_hit intersect_ray_box(const vec2& origin, const vec2& direction, const box2d& box) noexcept {
     /* For vec2 we only care about lanes 0 and 1.
@@ -1838,12 +1811,7 @@ inline ray_box_hit intersect_ray_box(const vec2& origin, const vec2& direction, 
     __m128 bmin, bmax;
     detail::load_min_max(box, bmin, bmax);
 
-    /* t values for near and far slabs */
-    const __m128 t1 = _mm_mul_ps(_mm_sub_ps(bmin, orig), inv_dir);
-    const __m128 t2 = _mm_mul_ps(_mm_sub_ps(bmax, orig), inv_dir);
-
-    const __m128 t_near = _mm_min_ps(t1, t2);
-    const __m128 t_far = _mm_max_ps(t1, t2);
+    const auto [t_near, t_far]{detail::slab_interval(orig, inv_dir, bmin, bmax)};
 
     /* t_entry = max of all near values, t_exit = min of all far values */
     /* For vec2: max(t_near.x, t_near.y) and min(t_far.x, t_far.y) */
@@ -1867,11 +1835,7 @@ inline ray_box_hit intersect_ray_box(const vec3& origin, const vec3& direction, 
     const __m128 bmin = _mm_load_ps(&box.min.x);
     const __m128 bmax = _mm_load_ps(&box.max.x);
 
-    const __m128 t1 = _mm_mul_ps(_mm_sub_ps(bmin, orig), inv_dir);
-    const __m128 t2 = _mm_mul_ps(_mm_sub_ps(bmax, orig), inv_dir);
-
-    const __m128 t_near = _mm_min_ps(t1, t2);
-    const __m128 t_far = _mm_max_ps(t1, t2);
+    const auto [t_near, t_far]{detail::slab_interval(orig, inv_dir, bmin, bmax)};
 
     /* Horizontal max of t_near lanes 0,1,2 and horizontal min of t_far lanes 0,1,2 */
     /* Shuffle: {y, z, x, _} */
@@ -1968,8 +1932,7 @@ inline ivec2 grid_cell(const vec2& point, const vec2& grid_origin, const float c
     const __m128 inv_size = _mm_set1_ps(1.0f / cell_size);
     const __m128 cell_f = _mm_floor_ps(_mm_mul_ps(p, inv_size));
 
-    /* Convert to int. _mm_cvttps_epi32 truncates, but we already floored */
-    const __m128i cell_i = _mm_cvtps_epi32(cell_f); /* rounds to nearest, but value is already integer after floor */
+    const __m128i cell_i{detail::saturating_cvt(cell_f)};
 
     alignas(16) int cells[4]{};
     _mm_store_si128(reinterpret_cast<__m128i*>(cells), cell_i);
@@ -1982,7 +1945,7 @@ inline ivec3 grid_cell(const vec3& point, const vec3& grid_origin, const float c
     const __m128 inv_size = _mm_set1_ps(1.0f / cell_size);
     const __m128 cell_f = _mm_floor_ps(_mm_mul_ps(p, inv_size));
 
-    const __m128i cell_i = _mm_cvtps_epi32(cell_f);
+    const __m128i cell_i{detail::saturating_cvt(cell_f)};
 
     alignas(16) int cells[4]{};
     _mm_store_si128(reinterpret_cast<__m128i*>(cells), cell_i);
@@ -2043,18 +2006,11 @@ inline transform inverse_uniform(const transform& tf) noexcept {
     return {inv_pos, inv_rot, {inv_s, inv_s, inv_s}};
 }
 
-/* Inverse of a non-uniform-scale transform.
- *
- * inv_scale = { 1/sx, 1/sy, 1/sz }
- * inv_rotation = conjugate(rotation)
- * inv_position = inv_rotation * (-position / scale)
- *
- * Note: non-uniform scale + rotation doesn't compose cleanly.
- * The inverse is correct for a single transform, but chaining
- * non-uniform-scale transforms is not equivalent to multiplying
- * these structs (requires a full mat4 for that).
- */
+/* Inverse of a transform with uniform scale. With a non-uniform scale the inverse applies the scale
+ * after the rotation, which a scale-then-rotate transform cannot represent: use inverse(to_mat4(tf)). */
 inline transform inverse(const transform& tf) noexcept {
+    assert(
+        nearly_equal(tf.scale.x, tf.scale.y) && nearly_equal(tf.scale.x, tf.scale.z) && "inverse(transform) needs a uniform scale; use inverse(to_mat4(tf))");
     const __m128 one = _mm_set1_ps(1.0f);
     const __m128 s = _mm_load_ps(&tf.scale.x);
     const __m128 inv_s = _mm_div_ps(one, s);
