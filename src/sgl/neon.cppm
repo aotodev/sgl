@@ -165,6 +165,12 @@ inline uint32x2_t n_or(uint32x2_t a, uint32x2_t b) noexcept {
 inline uint32x4_t n_or(uint32x4_t a, uint32x4_t b) noexcept {
     return vorrq_u32(a, b);
 }
+inline uint32x2_t n_and(uint32x2_t a, uint32x2_t b) noexcept {
+    return vand_u32(a, b);
+}
+inline uint32x4_t n_and(uint32x4_t a, uint32x4_t b) noexcept {
+    return vandq_u32(a, b);
+}
 
 /* --- Blend (bitwise select) --- */
 inline float32x2_t n_bsl(uint32x2_t m, float32x2_t a, float32x2_t b) noexcept {
@@ -462,6 +468,31 @@ inline float32x4_t load(const mat2& m) noexcept {
     return vld1q_f32(&m.cols[0].x);
 }
 
+/* @see the AVX `slab_interval`: no NaN reaches min/max, so the result matches it lane for lane. */
+template <class R> struct slab_interval_result {
+    R t_near;
+    R t_far;
+};
+
+template <class R> slab_interval_result<R> slab_interval(const R orig, const R inv_dir, const R bmin, const R bmax) noexcept {
+    const R inf{n_dup(std::numeric_limits<float>::infinity(), orig)};
+    const R neg_inf{n_dup(-std::numeric_limits<float>::infinity(), orig)};
+    const R t1{n_mul(n_sub(bmin, orig), inv_dir)};
+    const R t2{n_mul(n_sub(bmax, orig), inv_dir)};
+    const auto parallel{n_ceq(n_abs(inv_dir), inf)};
+    const auto inside{n_and(n_cle(bmin, orig), n_cle(orig, bmax))};
+    return {n_bsl(parallel, n_bsl(inside, neg_inf, inf), n_min(t1, t2)), n_bsl(parallel, n_bsl(inside, inf, neg_inf), n_max(t1, t2))};
+}
+
+/* @see the AVX `saturating_cvt`. vcvt saturates already; NaN would give 0 and is mapped to INT_MIN. */
+inline int32x4_t saturating_cvt(const float32x4_t f) noexcept {
+    return vbslq_s32(vceqq_f32(f, f), vcvtq_s32_f32(f), vdupq_n_s32(std::numeric_limits<std::int32_t>::min()));
+}
+
+inline int32x2_t saturating_cvt(const float32x2_t f) noexcept {
+    return vbsl_s32(vceq_f32(f, f), vcvt_s32_f32(f), vdup_n_s32(std::numeric_limits<std::int32_t>::min()));
+}
+
 } // namespace sgl::detail
 
 export namespace sgl {
@@ -469,26 +500,6 @@ export namespace sgl {
 /* ============================================================
  * Comparisons
  * ============================================================ */
-
-template <vector Vec> bool nearly_equal(const Vec& lhs, const Vec& rhs, const float abs_tol = fp32_abs_tol, const float rel_tol = fp32_rel_tol) noexcept {
-    const auto a = detail::load(lhs);
-    const auto b = detail::load(rhs);
-    const auto diff = detail::n_abs(detail::n_sub(a, b));
-    const auto exact = detail::n_ceq(a, b);
-    const auto abs_ok = detail::n_cle(diff, detail::n_dup(abs_tol, a));
-    const auto largest = detail::n_max(detail::n_abs(a), detail::n_abs(b));
-    const auto rel_ok = detail::n_cle(diff, detail::n_mul(largest, detail::n_dup(rel_tol, a)));
-    const auto ok = detail::n_or(exact, detail::n_or(abs_ok, rel_ok));
-    constexpr auto mask{detail::lane_mask<Vec>()};
-    return (detail::n_movemask(ok) & mask) == mask;
-}
-
-template <vector Vec> bool nearly_zero(const Vec& val, const float tol = fp32_abs_tol) noexcept {
-    const auto v = detail::load(val);
-    const auto ok = detail::n_clt(detail::n_abs(v), detail::n_dup(tol, v));
-    constexpr auto mask{detail::lane_mask<Vec>()};
-    return (detail::n_movemask(ok) & mask) == mask;
-}
 
 template <vector Vec> bool any_nearly_zero(const Vec& val, const float tol = fp32_abs_tol) noexcept {
     const auto v = detail::load(val);
@@ -771,15 +782,6 @@ template <vector Vec> bool is_perpendicular(const Vec& a, const Vec& b, float to
     return std::abs(detail::dot_scalar<Vec>(detail::load(a), detail::load(b))) <= tol;
 }
 
-template <vector Vec> bool is_parallel(const Vec& a, const Vec& b, float tol = fp32_rel_tol) noexcept {
-    const auto va = detail::load(a);
-    const auto vb = detail::load(b);
-    const auto ab = detail::dot_scalar<Vec>(va, vb);
-    const auto aa = detail::dot_scalar<Vec>(va, va);
-    const auto bb = detail::dot_scalar<Vec>(vb, vb);
-    return std::abs(ab * ab - aa * bb) <= tol * aa * bb;
-}
-
 template <vector Vec> bool all_greater_than(const Vec& a, const Vec& b) noexcept {
     constexpr auto mask{detail::lane_mask<Vec>()};
     return (detail::n_movemask(detail::n_cgt(detail::load(a), detail::load(b))) & mask) == mask;
@@ -793,10 +795,6 @@ template <vector Vec> bool all_less_than(const Vec& a, const Vec& b) noexcept {
 template <vector Vec> bool any_greater_than(const Vec& a, const Vec& b) noexcept {
     constexpr auto mask{detail::lane_mask<Vec>()};
     return static_cast<bool>(detail::n_movemask(detail::n_cgt(detail::load(a), detail::load(b))) & mask);
-}
-
-inline bool contains(const box3d& box, const vec3& point) {
-    return all_greater_than(point, box.min) && all_less_than(point, box.max);
 }
 
 /* ============================================================
@@ -824,11 +822,21 @@ inline vec3 cross(const vec3& a, const vec3& b) noexcept {
     return out;
 }
 
-template <> inline bool is_parallel<vec2>(const vec2& a, const vec2& b, float tol) noexcept {
-    return std::abs(cross(a, b)) <= tol;
-}
-template <> inline bool is_parallel<vec3>(const vec3& a, const vec3& b, float tol) noexcept {
-    return nearly_zero(cross(a, b), tol);
+/* @see the AVX `is_parallel`. */
+template <vector Vec> bool is_parallel(const Vec& a, const Vec& b, const float tol = fp32_rel_tol) noexcept {
+    const float aa{dot(a, a)};
+    const float bb{dot(b, b)};
+    float cross_sq{};
+    if constexpr (std::is_same_v<Vec, vec2>) {
+        const float c{cross(a, b)};
+        cross_sq = c * c;
+    } else if constexpr (std::is_same_v<Vec, vec3>) {
+        cross_sq = length_squared(cross(a, b));
+    } else {
+        const float ab{dot(a, b)};
+        cross_sq = std::abs(aa * bb - ab * ab);
+    }
+    return cross_sq <= tol * aa * bb;
 }
 
 /* vec2 perpendicular: {-y, x}, D-form */
@@ -854,11 +862,11 @@ inline vec3 perpendicular(const vec3& v) noexcept {
     return cross(v, vec3{0, 0, 1});
 }
 
+/* @see the AVX `angle_between`. */
 template <vector Vec> float angle_between(const Vec& a, const Vec& b) noexcept {
-    const auto va = detail::load(a);
-    const auto vb = detail::load(b);
-    auto ct = detail::dot_scalar<Vec>(va, vb) / std::sqrt(detail::dot_scalar<Vec>(va, va) * detail::dot_scalar<Vec>(vb, vb));
-    return std::acos(std::max(-1.0f, std::min(ct, 1.0f)));
+    const Vec u{a * length(b)};
+    const Vec v{b * length(a)};
+    return 2.0f * std::atan2(length(u - v), length(u + v));
 }
 
 /* ============================================================
@@ -952,6 +960,15 @@ template <box_type Box> bool contains_point(const Box& b, const detail::box_vec_
     const auto pv = detail::load(p);
     constexpr auto mask = detail::box_traits<Box>::lane_mask;
     return ((detail::n_movemask(detail::n_cle(lo, pv)) & detail::n_movemask(detail::n_cle(pv, hi))) & mask) == mask;
+}
+
+/* @see the AVX `contains`: closed, like contains_point. */
+inline bool contains(const box2d& box, const vec2& point) noexcept {
+    return contains_point(box, point);
+}
+
+inline bool contains(const box3d& box, const vec3& point) noexcept {
+    return contains_point(box, point);
 }
 
 template <box_type Box> Box intersection(const Box& a, const Box& b) noexcept {
@@ -1377,15 +1394,20 @@ inline mat4 to_mat4(const quat& q, const vec3& t) noexcept {
     return to_mat4(to_mat3(q), t);
 }
 
+/* @see the AVX `nearly_equal(quat)`. */
 inline bool nearly_equal(const quat& a, const quat& b, float abs_tol = fp32_abs_tol, float rel_tol = fp32_rel_tol) noexcept {
-    float32x4_t av = detail::load(a), bv = detail::load(b);
-    float32x4_t diff = vminq_f32(vabsq_f32(vsubq_f32(av, bv)), vabsq_f32(vaddq_f32(av, bv)));
-    float32x4_t tol = vaddq_f32(vdupq_n_f32(abs_tol), vmulq_f32(vdupq_n_f32(rel_tol), vmaxq_f32(vabsq_f32(av), vabsq_f32(bv))));
-    return detail::n_movemask(vcleq_f32(diff, tol)) == 0xF;
+    const float32x4_t av{detail::load(a)};
+    const float32x4_t bv{detail::load(b)};
+    const float32x4_t tol{vaddq_f32(vdupq_n_f32(abs_tol), vmulq_f32(vdupq_n_f32(rel_tol), vmaxq_f32(vabsq_f32(av), vabsq_f32(bv))))};
+    const bool same{detail::n_movemask(vcleq_f32(vabsq_f32(vsubq_f32(av, bv)), tol)) == 0xF};
+    const bool flipped{detail::n_movemask(vcleq_f32(vabsq_f32(vaddq_f32(av, bv)), tol)) == 0xF};
+    return same || flipped;
 }
 
+/* @see the AVX `angle_between(quat)`. */
 inline float angle_between(const quat& a, const quat& b) noexcept {
-    return 2.0f * std::acos(std::min(std::abs(dot(a, b)), 1.0f));
+    const quat d{conjugate(a) * b};
+    return 2.0f * std::atan2(std::sqrt(d.x * d.x + d.y * d.y + d.z * d.z), std::abs(d.w));
 }
 
 inline bool is_axis_aligned(const vec3& direction, float tolerance = fp32_rel_tol) noexcept {
@@ -1400,7 +1422,12 @@ template <spatial_vector Vec> Vec closest_point_on_segment(const Vec& point, con
     const auto p = detail::load(point), a = detail::load(seg_start), b = detail::load(seg_end);
     const auto ab = detail::n_sub(b, a), ap = detail::n_sub(p, a);
     auto t = detail::n_div(detail::dot_broadcast<Vec>(ab, ap), detail::dot_broadcast<Vec>(ab, ab));
-    t = detail::n_min(detail::n_max(t, detail::n_dup(0.0f, t)), detail::n_dup(1.0f, t));
+    /* t > 0 ? t : 0, the order maxps uses on x86, not FMAX, which propagates NaN: a zero-length
+     * segment's 0 / 0 then gives t = 0, the start, on both backends. */
+    const auto zero{detail::n_dup(0.0f, t)};
+    const auto one{detail::n_dup(1.0f, t)};
+    t = detail::n_bsl(detail::n_cgt(t, zero), t, zero);
+    t = detail::n_bsl(detail::n_clt(t, one), t, one);
     Vec out{};
     detail::store(detail::n_fma(a, t, ab), out);
     return out;
@@ -1566,11 +1593,11 @@ inline segment_intersection_2d intersect_segments_2d(const vec2& a0, const vec2&
 }
 
 inline ray_box_hit intersect_ray_box(const vec2& origin, const vec2& direction, const box2d& box) noexcept {
-    float32x2_t orig = detail::load(origin), inv_dir = vdiv_f32(vdup_n_f32(1.0f), detail::load(direction));
+    const float32x2_t orig{detail::load(origin)};
+    const float32x2_t inv_dir{vdiv_f32(vdup_n_f32(1.0f), detail::load(direction))};
     float32x2_t bmin, bmax;
     detail::load_min_max(box, bmin, bmax);
-    float32x2_t t1 = vmul_f32(vsub_f32(bmin, orig), inv_dir), t2 = vmul_f32(vsub_f32(bmax, orig), inv_dir);
-    float32x2_t t_near = vmin_f32(t1, t2), t_far = vmax_f32(t1, t2);
+    const auto [t_near, t_far]{detail::slab_interval(orig, inv_dir, bmin, bmax)};
     const float te{std::max(vget_lane_f32(t_near, 0), vget_lane_f32(t_near, 1))};
     const float tx{std::min(vget_lane_f32(t_far, 0), vget_lane_f32(t_far, 1))};
     if (te > tx || tx < 0) {
@@ -1580,9 +1607,9 @@ inline ray_box_hit intersect_ray_box(const vec2& origin, const vec2& direction, 
 }
 
 inline ray_box_hit intersect_ray_box(const vec3& origin, const vec3& direction, const box3d& box) noexcept {
-    float32x4_t orig = vld1q_f32(&origin.x), inv_dir = vdivq_f32(vdupq_n_f32(1.0f), vld1q_f32(&direction.x));
-    float32x4_t t1 = vmulq_f32(vsubq_f32(vld1q_f32(&box.min.x), orig), inv_dir), t2 = vmulq_f32(vsubq_f32(vld1q_f32(&box.max.x), orig), inv_dir);
-    float32x4_t tn = vminq_f32(t1, t2), tf = vmaxq_f32(t1, t2);
+    const float32x4_t orig{vld1q_f32(&origin.x)};
+    const float32x4_t inv_dir{vdivq_f32(vdupq_n_f32(1.0f), vld1q_f32(&direction.x))};
+    const auto [tn, tf]{detail::slab_interval(orig, inv_dir, vld1q_f32(&box.min.x), vld1q_f32(&box.max.x))};
     const float te{std::max({vgetq_lane_f32(tn, 0), vgetq_lane_f32(tn, 1), vgetq_lane_f32(tn, 2)})};
     const float tx{std::min({vgetq_lane_f32(tf, 0), vgetq_lane_f32(tf, 1), vgetq_lane_f32(tf, 2)})};
     if (te > tx || tx < 0) {
@@ -1639,13 +1666,13 @@ inline segment_polygon_hit intersect_segment_polygon(const vec2& a, const vec2& 
 
 inline ivec2 grid_cell(const vec2& point, const vec2& grid_origin, float cell_size) noexcept {
     float32x2_t p = vmul_n_f32(vsub_f32(detail::load(point), detail::load(grid_origin)), 1.0f / cell_size);
-    int32x2_t ci = vcvt_s32_f32(vrndm_f32(p));
+    const int32x2_t ci{detail::saturating_cvt(vrndm_f32(p))};
     return {vget_lane_s32(ci, 0), vget_lane_s32(ci, 1)};
 }
 
 inline ivec3 grid_cell(const vec3& point, const vec3& grid_origin, float cell_size) noexcept {
     float32x4_t p = vmulq_n_f32(vsubq_f32(vld1q_f32(&point.x), vld1q_f32(&grid_origin.x)), 1.0f / cell_size);
-    int32x4_t ci = vcvtq_s32_f32(vrndmq_f32(p));
+    const int32x4_t ci{detail::saturating_cvt(vrndmq_f32(p))};
     return {vgetq_lane_s32(ci, 0), vgetq_lane_s32(ci, 1), vgetq_lane_s32(ci, 2)};
 }
 
@@ -1675,7 +1702,10 @@ inline transform inverse_uniform(const transform& tf) noexcept {
     return {rotate(ir, {-tf.position.x * is, -tf.position.y * is, -tf.position.z * is}), ir, {is, is, is}};
 }
 
+/* @see the AVX `inverse(transform)`: uniform scale only. */
 inline transform inverse(const transform& tf) noexcept {
+    assert(
+        nearly_equal(tf.scale.x, tf.scale.y) && nearly_equal(tf.scale.x, tf.scale.z) && "inverse(transform) needs a uniform scale; use inverse(to_mat4(tf))");
     float32x4_t inv_s = vdivq_f32(vdupq_n_f32(1.0f), vld1q_f32(&tf.scale.x));
     vec3 is{};
     vst1q_f32(&is.x, inv_s);

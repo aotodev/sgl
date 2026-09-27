@@ -45,12 +45,18 @@ constexpr float fp32_rel_tol{128.0f * std::numeric_limits<float>::epsilon()};
 
 /**
  * Returns true when lhs and rhs agree within an absolute or relative tolerance.
- * Bitwise equality is checked first to handle +/-inf and +/-0 correctly.
+ * Exact equality is checked first, so equal infinities and +0 / -0 compare equal; an infinity is
+ * otherwise equal to nothing.
  */
 inline SGL_CMATH_CONSTEXPR bool nearly_equal(
     const float lhs, const float rhs, const float abs_tol = fp32_abs_tol, const float rel_tol = fp32_rel_tol) noexcept {
     if (lhs == rhs) {
         return true;
+    }
+
+    /* Unequal with an infinity on either side: |inf - x| = inf would pass the relative check against inf * rel_tol. */
+    if (std::isinf(lhs) || std::isinf(rhs)) {
+        return false;
     }
 
     const auto diff{std::abs(lhs - rhs)};

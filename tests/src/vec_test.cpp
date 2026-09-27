@@ -4,6 +4,7 @@
  */
 #include <cmath>
 #include <gtest/gtest.h>
+#include <limits>
 
 import sgl;
 
@@ -25,6 +26,32 @@ TEST(Vec3, NearlyEqual) {
 }
 TEST(Vec4, NearlyEqual) {
     EXPECT_TRUE(sgl::nearly_equal(sgl::vec4{1, 2, 3, 4}, sgl::vec4{1, 2, 3, 4}));
+}
+
+/* Regression: |inf - x| = inf passed the relative check against inf * rel_tol. */
+TEST(Scalar, NearlyEqualInfinity) {
+    constexpr float inf{std::numeric_limits<float>::infinity()};
+    EXPECT_FALSE(sgl::nearly_equal(inf, 0.0f));
+    EXPECT_FALSE(sgl::nearly_equal(inf, -inf));
+    EXPECT_FALSE(sgl::nearly_equal(inf, 1e30f));
+    EXPECT_FALSE(sgl::nearly_equal(-1e30f, -inf));
+    EXPECT_TRUE(sgl::nearly_equal(inf, inf));
+    EXPECT_TRUE(sgl::nearly_equal(-inf, -inf));
+    EXPECT_FALSE(sgl::nearly_equal(sgl::vec3{inf, 0, 0}, sgl::vec3{0, 0, 0}));
+    EXPECT_TRUE(sgl::nearly_equal(sgl::vec3{inf, 1, 2}, sgl::vec3{inf, 1, 2}));
+}
+
+/* Regression: (&x)[i] read past a scalar member, which also broke constant evaluation. */
+TEST(Vec, IndexingIsConstexpr) {
+    static_assert(sgl::vec2{1, 2}[1] == 2.0f);
+    static_assert(sgl::vec3{1, 2, 3}[1] == 2.0f && sgl::vec3{1, 2, 3}[2] == 3.0f);
+    static_assert(sgl::vec4{1, 2, 3, 4}[3] == 4.0f);
+    sgl::vec3 v{1, 2, 3};
+    v[2] = 5.0f;
+    EXPECT_EQ(v.z, 5.0f);
+    sgl::vec4 w{};
+    w[3] = 7.0f;
+    EXPECT_EQ(w.w, 7.0f);
 }
 
 TEST(Vec2, NearlyZero) {
@@ -326,6 +353,19 @@ TEST(Vec2, IsParallel) {
     EXPECT_FALSE(sgl::is_parallel(sgl::vec2{1, 0}, sgl::vec2{0, 1}));
 }
 
+/* Regression: vec2/vec3 compared |cross| to an absolute tolerance, so short perpendicular vectors
+ * read as parallel and long nearly parallel ones did not; vec4 was relative. */
+TEST(Vec, IsParallelIsScaleInvariant) {
+    EXPECT_FALSE(sgl::is_parallel(sgl::vec3{1e-3f, 0, 0}, sgl::vec3{0, 1e-3f, 0}));
+    EXPECT_TRUE(sgl::is_parallel(sgl::vec3{1000, 0, 0}, sgl::vec3{1000, 0.01f, 0}));
+    EXPECT_FALSE(sgl::is_parallel(sgl::vec2{1e-3f, 0}, sgl::vec2{0, 1e-3f}));
+    EXPECT_TRUE(sgl::is_parallel(sgl::vec2{1000, 0}, sgl::vec2{1000, 0.01f}));
+    /* the same answer in every dimension */
+    EXPECT_FALSE(sgl::is_parallel(sgl::vec4{1e-3f, 0, 0, 0}, sgl::vec4{0, 1e-3f, 0, 0}));
+    EXPECT_TRUE(sgl::is_parallel(sgl::vec4{1000, 0, 0, 0}, sgl::vec4{1000, 0.01f, 0, 0}));
+    EXPECT_TRUE(sgl::is_parallel(sgl::vec3{1, 2, 3}, sgl::vec3{-2, -4, -6}));
+}
+
 /* --- Comparison --- */
 
 TEST(Vec3, AllGreaterThan) {
@@ -378,4 +418,13 @@ TEST(Vec3, AngleBetween) {
 TEST(Vec2, AngleBetween) {
     auto a = sgl::angle_between(sgl::vec2{1, 0}, sgl::vec2{-1, 0});
     EXPECT_NEAR(a, std::acos(-1.0f), 1e-5f); /* pi */
+}
+
+/* Regression: acos near 1 returned 0 for a 1e-4 rad angle. */
+TEST(Vec, AngleBetweenSmallAngles) {
+    EXPECT_NEAR(sgl::angle_between(sgl::vec3{1, 0, 0}, sgl::vec3{1, 1e-4f, 0}), 1e-4f, 1e-8f);
+    EXPECT_NEAR(sgl::angle_between(sgl::vec2{1, 0}, sgl::vec2{1, 1e-4f}), 1e-4f, 1e-8f);
+    EXPECT_NEAR(sgl::angle_between(sgl::vec4{1, 0, 0, 0}, sgl::vec4{1, 0, 0, 1e-4f}), 1e-4f, 1e-8f);
+    EXPECT_NEAR(sgl::angle_between(sgl::vec3{3, 0, 0}, sgl::vec3{-2, 1e-4f, 0}), std::acos(-1.0f) - 5e-5f, 1e-6f);
+    EXPECT_EQ(sgl::angle_between(sgl::vec3{0, 0, 0}, sgl::vec3{1, 0, 0}), 0.0f) << "zero vector";
 }
