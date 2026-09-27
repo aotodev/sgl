@@ -22,15 +22,20 @@ concurrency:
 
 jobs:
   build-test:
+    name: ${{ matrix.build_type }}
     runs-on: ubuntu-latest
     container:
       image: ghcr.io/aotodev/sgl-ci:latest
+    strategy:
+      fail-fast: false
+      matrix:
+        build_type: [Debug, Release]
     steps:
       - uses: actions/checkout@v4
       - name: Configure, build and test
         run: |
           cmake -G Ninja -B build \
             -DCMAKE_TOOLCHAIN_FILE=cmake/toolchain-aarch64.cmake \
-            -DCMAKE_BUILD_TYPE=Release -DSGL_TESTS=ON
+            -DCMAKE_BUILD_TYPE=${{ matrix.build_type }} -DSGL_TESTS=ON
           cmake --build build -j
           ctest --test-dir build --output-on-failure

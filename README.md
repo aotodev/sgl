@@ -3,6 +3,9 @@
 [![avx-gcc](https://github.com/aotodev/sgl/actions/workflows/avx-gcc.yml/badge.svg?branch=master)](https://github.com/aotodev/sgl/actions/workflows/avx-gcc.yml)
 [![avx-clang](https://github.com/aotodev/sgl/actions/workflows/avx-clang.yml/badge.svg?branch=master)](https://github.com/aotodev/sgl/actions/workflows/avx-clang.yml)
 [![neon](https://github.com/aotodev/sgl/actions/workflows/neon.yml/badge.svg?branch=master)](https://github.com/aotodev/sgl/actions/workflows/neon.yml)
+[![msvc](https://github.com/aotodev/sgl/actions/workflows/msvc.yml/badge.svg?branch=master)](https://github.com/aotodev/sgl/actions/workflows/msvc.yml)
+[![sanitize](https://github.com/aotodev/sgl/actions/workflows/sanitize.yml/badge.svg?branch=master)](https://github.com/aotodev/sgl/actions/workflows/sanitize.yml)
+[![install](https://github.com/aotodev/sgl/actions/workflows/install.yml/badge.svg?branch=master)](https://github.com/aotodev/sgl/actions/workflows/install.yml)
 
 A C++20 module-based, SIMD-accelerated computational geometry library.
 
@@ -190,6 +193,7 @@ module interface with the matching instruction set.
 | `SGL_BENCHMARKS` | `OFF`          | Build the Google Benchmark suite             |
 | `SGL_PIC`        | `OFF`          | Build with position-independent code         |
 | `SGL_INSTALL`    | top-level only | Generate install + `find_package()` rules    |
+| `SGL_SANITIZERS` | `OFF`          | Build with ASan + UBSan (GCC/Clang)          |
 
 ### Running the tests
 

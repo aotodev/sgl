@@ -1,4 +1,4 @@
-# Native x86-64 build + tests with GCC (the AVX2/FMA path).
+# Native x86-64 build + tests with GCC (the AVX2/FMA path). The Release leg also builds bench/.
 name: avx-gcc
 
 on:
@@ -7,6 +7,7 @@ on:
     paths:
       - 'src/**'
       - 'tests/**'
+      - 'bench/**'
       - 'cmake/**'
       - '**/CMakeLists.txt'
       - '.github/workflows/avx-gcc.yml'
@@ -21,13 +22,19 @@ concurrency:
 
 jobs:
   build-test:
+    name: ${{ matrix.build_type }}
     runs-on: ubuntu-latest
     container:
       image: ghcr.io/aotodev/sgl-ci:latest
+    strategy:
+      fail-fast: false
+      matrix:
+        build_type: [Debug, Release]
     steps:
       - uses: actions/checkout@v4
       - name: Configure, build and test
         run: |
-          CXX=g++ cmake -G Ninja -B build -DCMAKE_BUILD_TYPE=Release -DSGL_TESTS=ON
+          CXX=g++ cmake -G Ninja -B build -DCMAKE_BUILD_TYPE=${{ matrix.build_type }} -DSGL_TESTS=ON \
+            -DSGL_BENCHMARKS=${{ matrix.build_type == 'Release' && 'ON' || 'OFF' }}
           cmake --build build -j
           ctest --test-dir build --output-on-failure

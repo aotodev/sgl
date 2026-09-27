@@ -152,7 +152,7 @@ template <class T> ref_hit<T> ref_ray(const point<T>& lo, const point<T>& hi, co
     T t_far{t_max};
     bool inside{true};
     for (std::size_t a{}; a < 3; ++a) {
-        const T inv{T{1} / d[a]};
+        const T inv{d[a] == T{0} ? std::copysign(std::numeric_limits<T>::infinity(), d[a]) : T{1} / d[a]};
         if (std::isinf(inv)) {
             inside = inside && lo[a] <= o[a] && o[a] <= hi[a];
             continue;

@@ -1,0 +1,45 @@
+# Installs sgl, then builds tests/install against it through find_package, as a downstream project would.
+name: install
+
+on:
+  push:
+    branches: [master]
+    paths:
+      - 'src/**'
+      - 'tests/install/**'
+      - 'cmake/**'
+      - '**/CMakeLists.txt'
+      - '.github/workflows/install.yml'
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: "${{ github.workflow }}-${{ github.ref }}"
+  cancel-in-progress: true
+
+jobs:
+  install:
+    name: ${{ matrix.cxx }}
+    runs-on: ubuntu-latest
+    container:
+      image: ghcr.io/aotodev/sgl-ci:latest
+    strategy:
+      fail-fast: false
+      matrix:
+        cxx: [g++, clang++]
+    env:
+      CXX: ${{ matrix.cxx }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build and install sgl
+        run: |
+          cmake -G Ninja -B build -DCMAKE_BUILD_TYPE=Release -DCMAKE_INSTALL_PREFIX="$RUNNER_TEMP/prefix"
+          cmake --build build -j
+          cmake --install build
+      - name: Build and run the consumer
+        run: |
+          cmake -G Ninja -S tests/install -B consumer -DCMAKE_PREFIX_PATH="$RUNNER_TEMP/prefix"
+          cmake --build consumer
+          ctest --test-dir consumer --output-on-failure
