@@ -4,6 +4,7 @@
 [![avx-clang](https://github.com/aotodev/sgl/actions/workflows/avx-clang.yml/badge.svg?branch=master)](https://github.com/aotodev/sgl/actions/workflows/avx-clang.yml)
 [![neon](https://github.com/aotodev/sgl/actions/workflows/neon.yml/badge.svg?branch=master)](https://github.com/aotodev/sgl/actions/workflows/neon.yml)
 [![msvc](https://github.com/aotodev/sgl/actions/workflows/msvc.yml/badge.svg?branch=master)](https://github.com/aotodev/sgl/actions/workflows/msvc.yml)
+[![macos](https://github.com/aotodev/sgl/actions/workflows/macos.yml/badge.svg?branch=master)](https://github.com/aotodev/sgl/actions/workflows/macos.yml)
 [![sanitize](https://github.com/aotodev/sgl/actions/workflows/sanitize.yml/badge.svg?branch=master)](https://github.com/aotodev/sgl/actions/workflows/sanitize.yml)
 [![install](https://github.com/aotodev/sgl/actions/workflows/install.yml/badge.svg?branch=master)](https://github.com/aotodev/sgl/actions/workflows/install.yml)
 
@@ -119,6 +120,8 @@ compiles unchanged against the other.
   floor for C++20 named modules plus CWG 2518 (`static_assert(false)` in
   uninstantiated template branches)
 - A C++20 standard library and toolchain with named-module support
+- On macOS, LLVM Clang (e.g. Homebrew's `llvm`): Apple Clang is not supported, because
+  CMake does not scan C++20 modules for it
 
 ## Building
 
@@ -145,6 +148,11 @@ CXX=clang++ cmake -B build -G Ninja -DCMAKE_CXX_FLAGS="-stdlib=libc++"
 
 # MSVC (x64 Native Tools prompt, or a cross wrapper), Ninja generator
 cmake -B build -G Ninja
+
+# macOS: Homebrew LLVM Clang, linking its own libc++ rather than the older system one
+llvm="$(brew --prefix llvm)"
+CXX="$llvm/bin/clang++" cmake -B build -G Ninja \
+  -DCMAKE_EXE_LINKER_FLAGS="-L$llvm/lib/c++ -L$llvm/lib/unwind -lunwind -Wl,-rpath,$llvm/lib/c++"
 ```
 
 Then `cmake --build build` as usual.

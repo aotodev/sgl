@@ -31,7 +31,10 @@ set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 # Compiler support check: each minimum is the higher of the C++20 named-module floor
 # and the CWG 2518 floor.
 # ---------------------------------------------------------------------------------------
-if(CMAKE_CXX_COMPILER_ID MATCHES "Clang")
+if(CMAKE_CXX_COMPILER_ID STREQUAL "AppleClang")
+    message(FATAL_ERROR "sgl: Apple Clang is not supported: CMake scans C++20 modules only for LLVM "
+        "Clang, GCC and MSVC. On macOS use LLVM Clang, e.g. Homebrew's llvm.")
+elseif(CMAKE_CXX_COMPILER_ID MATCHES "Clang")
     if(CMAKE_CXX_COMPILER_VERSION VERSION_LESS "17")
         message(FATAL_ERROR "sgl: Clang >= 17 required (C++20 modules + CWG 2518) "
             "(found ${CMAKE_CXX_COMPILER_VERSION}).")
