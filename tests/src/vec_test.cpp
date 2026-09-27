@@ -7,6 +7,12 @@
 
 import sgl;
 
+/* The SIMD helpers live in sgl::detail, which is not an associated namespace of any sgl type:
+ * argument-dependent lookup from consumer code must not find them. */
+template <class T>
+concept adl_finds_simd_load = requires(const T& v) { load(v); };
+static_assert(!adl_finds_simd_load<sgl::vec3> && !adl_finds_simd_load<sgl::vec2> && !adl_finds_simd_load<sgl::quat>);
+
 /* --- nearly_equal / nearly_zero --- */
 
 TEST(Vec2, NearlyEqual) {
@@ -214,6 +220,27 @@ TEST(Vec3, NormalizeSafe_Zero) {
 TEST(Vec3, NormalizedSafe_Zero) {
     auto r = sgl::normalized_safe(sgl::vec3{0, 0, 0});
     EXPECT_FLOAT_EQ(r.x, 0.0f);
+}
+
+/* The safe variants are exact (no rsqrt estimate), so they agree with normalized bit for bit
+ * and do not depend on the CPU vendor. */
+TEST(Vec3, NormalizedSafe_IsExact) {
+    for (const auto v : {sgl::vec3{3, 4, 12}, sgl::vec3{1e-3f, -2e-3f, 7e-4f}, sgl::vec3{123.456f, -0.5f, 9876.5f}, sgl::vec3{1, 1, 1}}) {
+        const auto safe{sgl::normalized_safe(v)};
+        const auto exact{sgl::normalized(v)};
+        EXPECT_EQ(safe.x, exact.x);
+        EXPECT_EQ(safe.y, exact.y);
+        EXPECT_EQ(safe.z, exact.z);
+        auto in_place{v};
+        sgl::normalize_safe(in_place);
+        EXPECT_EQ(in_place.x, exact.x);
+        EXPECT_EQ(in_place.y, exact.y);
+        EXPECT_EQ(in_place.z, exact.z);
+    }
+    const auto safe2{sgl::normalized_safe(sgl::vec2{0.3f, -0.7f})};
+    const auto exact2{sgl::normalized(sgl::vec2{0.3f, -0.7f})};
+    EXPECT_EQ(safe2.x, exact2.x);
+    EXPECT_EQ(safe2.y, exact2.y);
 }
 
 TEST(Vec2, Normalized) {
