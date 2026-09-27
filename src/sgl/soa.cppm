@@ -414,7 +414,8 @@ private:
         size_ = other.size_;
     }
 
-    static constexpr std::size_t stride(const std::size_t cap) noexcept { return cap + soa::block_size; }
+    /* Zero without storage: array(a) on an empty buffer must not offset its null data pointer. */
+    static constexpr std::size_t stride(const std::size_t cap) noexcept { return cap ? cap + soa::block_size : 0; }
     static constexpr std::size_t bytes(const std::size_t cap) noexcept { return N * stride(cap) * sizeof(T); }
 
     void release() noexcept {
